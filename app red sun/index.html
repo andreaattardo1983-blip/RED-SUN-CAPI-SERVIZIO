@@ -1,0 +1,1329 @@
+import React, { useState, useMemo } from "react";
+
+const ROLES = [
+  { id: "HOME", label: "Home Page", icon: "🏨", desc: "Panoramica e accesso rapido ai reparti" },
+  { id: "RECEPTION", label: "Reception", icon: "🛎️", desc: "Arrivi, partenze, coperti domani e manutenzione" },
+  { id: "SALA", label: "Sala Ristorante", icon: "🍽️", desc: "Presenze, note sala e coperti sincronizzati" },
+  { id: "CUCINA", label: "Cucina", icon: "👨‍🍳", desc: "Presenze, menu oggi/domani e note intolleranze" },
+  { id: "LAVANDERIA", label: "Lavanderia & Spazi Comuni", icon: "🧺", desc: "Presenze, camere pronte e spazi comuni" },
+  { id: "MANUTENZIONE", label: "Manutenzione", icon: "🔧", desc: "Ticket camere, apertura e avanzamento stato" },
+  { id: "PLONGE", label: "Plonge", icon: "🍴", desc: "Presenze essenziali, banchetti e attrezzature" },
+  { id: "DIRETTORE", label: "Direttore", icon: "👔", desc: "Controllo totale, modifiche, storico e avvisi" },
+];
+
+const ATTENDANCE_OPTIONS = [
+  { key: "PRESENTE", label: "Presente", icon: "✅", badge: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  { key: "RIPOSO", label: "Riposo", icon: "😴", badge: "bg-sky-100 text-sky-800 border-sky-200" },
+  { key: "FERIE", label: "Ferie", icon: "🏖", badge: "bg-amber-100 text-amber-800 border-amber-200" },
+  { key: "MALATTIA", label: "Malattia", icon: "🤒", badge: "bg-rose-100 text-rose-800 border-rose-200" },
+  { key: "ASSENTE_INGIUSTIFICATO", label: "Assente", icon: "❌", badge: "bg-slate-200 text-slate-800 border-slate-300" },
+];
+
+const INITIAL_EMPLOYEES = [
+  { id: 1, nome: "Marco", reparto: "SALA", stato: "PRESENTE" },
+  { id: 2, nome: "Luca", reparto: "SALA", stato: "PRESENTE" },
+  { id: 3, nome: "Paolo", reparto: "SALA", stato: "RIPOSO" },
+  { id: 4, nome: "Anna", reparto: "SALA", stato: "FERIE" },
+  { id: 5, nome: "Mario", reparto: "SALA", stato: "MALATTIA" },
+  { id: 6, nome: "Giulia", reparto: "CUCINA", stato: "PRESENTE" },
+  { id: 7, nome: "Stefano", reparto: "CUCINA", stato: "PRESENTE" },
+  { id: 8, nome: "Elena", reparto: "CUCINA", stato: "RIPOSO" },
+  { id: 9, nome: "Carla", reparto: "LAVANDERIA", stato: "PRESENTE" },
+  { id: 10, nome: "Davide", reparto: "LAVANDERIA", stato: "PRESENTE" },
+  { id: 11, nome: "Roberto", reparto: "MANUTENZIONE", stato: "PRESENTE" },
+  { id: 12, nome: "Samir", reparto: "PLONGE", stato: "PRESENTE" },
+  { id: 13, nome: "Kevin", reparto: "PLONGE", stato: "RIPOSO" },
+];
+
+const INITIAL_MOVIMENTO = {
+  data: new Date().toISOString().slice(0, 10),
+  arriviOggi: 35,
+  partenzeOggi: 28,
+  ospitiDomani: 172,
+  colazioniDomani: 172,
+  pranziDomani: 68,
+  ceneDomani: 138,
+};
+
+const INITIAL_MENUS = {
+  oggi: {
+    primi: "Gnocchetti sardi",
+    secondi: "Orata al forno",
+    contorni: "Verdure grigliate",
+    dessert: "Tiramisù della casa",
+  },
+  domani: {
+    primi: "Trofie al pesto genovese",
+    secondi: "Tagliata di manzo al rosmarino",
+    contorni: "Patate al forno",
+    dessert: "Panna cotta ai frutti di bosco",
+  },
+};
+
+const INITIAL_NOTES = [
+  { id: 1, reparto: "SALA", testo: "Gruppo 40 pax cena", creatoDa: "Reception", ora: "09:15" },
+  { id: 2, reparto: "SALA", testo: "Evento sala congressi", creatoDa: "Reception", ora: "09:40" },
+  { id: 3, reparto: "SALA", testo: "Tavolo VIP", creatoDa: "Reception", ora: "10:05" },
+  { id: 4, reparto: "CUCINA", testo: "3 Celiaci", creatoDa: "Sala / Reception", ora: "09:20" },
+  { id: 5, reparto: "CUCINA", testo: "2 Vegani", creatoDa: "Sala / Reception", ora: "09:20" },
+  { id: 6, reparto: "CUCINA", testo: "1 Intollerante lattosio", creatoDa: "Sala / Reception", ora: "09:20" },
+  { id: 7, reparto: "PLONGE", testo: "Supporto banchetto", creatoDa: "Cucina", ora: "08:50" },
+  { id: 8, reparto: "PLONGE", testo: "Attrezzature mancanti", creatoDa: "Plonge", ora: "09:30" },
+];
+
+const INITIAL_ROOMS = [
+  { numero: "101", pronta: true, aggiornataAlle: "09:10", da: "Carla" },
+  { numero: "103", pronta: true, aggiornataAlle: "09:25", da: "Carla" },
+  { numero: "110", pronta: true, aggiornataAlle: "09:45", da: "Davide" },
+  { numero: "214", pronta: true, aggiornataAlle: "10:00", da: "Davide" },
+  { numero: "105", pronta: false, aggiornataAlle: "—", da: "—" },
+  { numero: "118", pronta: false, aggiornataAlle: "—", da: "—" },
+  { numero: "202", pronta: false, aggiornataAlle: "—", da: "—" },
+];
+
+const INITIAL_COMMON_AREAS = [
+  { id: "hall", nome: "Hall", pronta: true },
+  { id: "piscina", nome: "Piscina", pronta: true },
+  { id: "corridoi", nome: "Corridoi", pronta: true },
+  { id: "bagni", nome: "Bagni comuni", pronta: true },
+];
+
+const INITIAL_TICKETS = [
+  {
+    id: 1,
+    codice: "#001",
+    camera: "118",
+    descrizione: "Climatizzatore non funzionante",
+    stato: "APERTO",
+    dataApertura: "Oggi 08:40",
+    origine: "Reception",
+  },
+  {
+    id: 2,
+    codice: "#002",
+    camera: "214",
+    descrizione: "Scarico doccia",
+    stato: "IN_LAVORAZIONE",
+    dataApertura: "Oggi 09:15",
+    origine: "Lavanderia",
+  },
+];
+
+const INITIAL_HISTORY = [
+  {
+    data: "Ieri",
+    arrivi: 31,
+    partenze: 29,
+    colazioni: 165,
+    pranzi: 62,
+    cene: 134,
+    camerePronte: 54,
+    ticketChiusi: 4,
+    sintesi: "Giornata regolare, cena gruppo congressi completata.",
+  },
+  {
+    data: "2 giorni fa",
+    arrivi: 42,
+    partenze: 24,
+    colazioni: 150,
+    pranzi: 58,
+    cene: 129,
+    camerePronte: 58,
+    ticketChiusi: 3,
+    sintesi: "Picco arrivi pomeridiani, nessun ritardo pulizie.",
+  },
+];
+
+function StatusBadge({ stato }) {
+  if (stato === "APERTO") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-800 border border-rose-200">
+        🔴 Aperto
+      </span>
+    );
+  }
+  if (stato === "IN_LAVORAZIONE") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800 border border-amber-200">
+        🟡 In Lavorazione
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800 border border-emerald-200">
+      🟢 Risolto
+    </span>
+  );
+}
+
+function AttendancePill({ stato, onClick }) {
+  const opt = ATTENDANCE_OPTIONS.find((o) => o.key === stato) || ATTENDANCE_OPTIONS[0];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Clicca per cambiare stato presenza"
+      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition hover:scale-[1.02] cursor-pointer ${opt.badge}`}
+    >
+      <span>{opt.icon}</span>
+      <span>{opt.label}</span>
+    </button>
+  );
+}
+
+export default function HotelOperationsHub() {
+  const [activeRole, setActiveRole] = useState("HOME");
+  const [employees, setEmployees] = useState(INITIAL_EMPLOYEES);
+  const [movimento, setMovimento] = useState(INITIAL_MOVIMENTO);
+  const [menus, setMenus] = useState(INITIAL_MENUS);
+  const [menuTab, setMenuTab] = useState("oggi");
+  const [notes, setNotes] = useState(INITIAL_NOTES);
+  const [rooms, setRooms] = useState(INITIAL_ROOMS);
+  const [commonAreas, setCommonAreas] = useState(INITIAL_COMMON_AREAS);
+  const [tickets, setTickets] = useState(INITIAL_TICKETS);
+  const [history] = useState(INITIAL_HISTORY);
+  const [broadcasts, setBroadcasts] = useState([
+    {
+      id: 1,
+      testo: "Controllo tavoli VIP e allergie entro le ore 11:30.",
+      ora: "09:00",
+      autore: "Direttore",
+    },
+  ]);
+  const [toast, setToast] = useState(null);
+
+  const [showMaintModal, setShowMaintModal] = useState(false);
+  const [newTicketRoom, setNewTicketRoom] = useState("");
+  const [newTicketDesc, setNewTicketDesc] = useState("");
+  const [newNoteText, setNewNoteText] = useState("");
+  const [newNoteDept, setNewNoteDept] = useState("SALA");
+  const [roomInput, setRoomInput] = useState("");
+  const [broadcastText, setBroadcastText] = useState("");
+  const [directorDeptFilter, setDirectorDeptFilter] = useState("TUTTI");
+
+  const notify = (msg) => {
+    setToast(msg);
+    setTimeout(() => {
+      setToast((prev) => (prev === msg ? null : prev));
+    }, 3200);
+  };
+
+  const cycleAttendance = (empId) => {
+    setEmployees((prev) =>
+      prev.map((emp) => {
+        if (emp.id !== empId) return emp;
+        const idx = ATTENDANCE_OPTIONS.findIndex((o) => o.key === emp.stato);
+        const next = ATTENDANCE_OPTIONS[(idx + 1) % ATTENDANCE_OPTIONS.length];
+        notify(`${emp.nome}: ${next.icon} ${next.label}`);
+        return { ...emp, stato: next.key };
+      })
+    );
+  };
+
+  const setAttendanceDirect = (empId, stato) => {
+    setEmployees((prev) =>
+      prev.map((emp) => (emp.id === empId ? { ...emp, stato } : emp))
+    );
+  };
+
+  const handleCreateTicket = (e) => {
+    e.preventDefault();
+    if (!newTicketRoom.trim() || !newTicketDesc.trim()) return;
+    const nextNum = String(tickets.length + 1).padStart(3, "0");
+    const created = {
+      id: Date.now(),
+      codice: `#${nextNum}`,
+      camera: newTicketRoom.trim(),
+      descrizione: newTicketDesc.trim(),
+      stato: "APERTO",
+      dataApertura: "Adesso",
+      origine: activeRole === "RECEPTION" ? "Reception" : activeRole,
+    };
+    setTickets((prev) => [created, ...prev]);
+    setNewTicketRoom("");
+    setNewTicketDesc("");
+    setShowMaintModal(false);
+    notify(`Ticket ${created.codice} inviato a Manutenzione (Camera ${created.camera})`);
+  };
+
+  const advanceTicketStatus = (ticketId) => {
+    const order = ["APERTO", "IN_LAVORAZIONE", "RISOLTO"];
+    setTickets((prev) =>
+      prev.map((t) => {
+        if (t.id !== ticketId) return t;
+        const next = order[(order.indexOf(t.stato) + 1) % order.length];
+        notify(`Ticket ${t.codice} aggiornato: ${next.replace("_", " ")}`);
+        return { ...t, stato: next };
+      })
+    );
+  };
+
+  const handleMarkRoomReady = (e) => {
+    e.preventDefault();
+    const num = roomInput.trim();
+    if (!num) return;
+    const ora = new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+    setRooms((prev) => {
+      const exists = prev.some((r) => r.numero === num);
+      if (exists) {
+        return prev.map((r) =>
+          r.numero === num ? { ...r, pronta: true, aggiornataAlle: ora, da: "Lavanderia" } : r
+        );
+      }
+      return [{ numero: num, pronta: true, aggiornataAlle: ora, da: "Lavanderia" }, ...prev];
+    });
+    setRoomInput("");
+    notify(`Camera ${num} segnata PRONTA — Notificati Reception e Direttore`);
+  };
+
+  const toggleRoomReady = (num) => {
+    const ora = new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.numero !== num) return r;
+        const nextReady = !r.pronta;
+        if (nextReady) {
+          notify(`Camera ${num} PRONTA — Notificati Reception e Direttore`);
+        }
+        return { ...r, pronta: nextReady, aggiornataAlle: ora, da: "Lavanderia" };
+      })
+    );
+  };
+
+  const toggleCommonArea = (id) => {
+    setCommonAreas((prev) =>
+      prev.map((area) => (area.id === id ? { ...area, pronta: !area.pronta } : area))
+    );
+  };
+
+  const handleAddNote = (e, forcedDept = null) => {
+    e.preventDefault();
+    if (!newNoteText.trim()) return;
+    const dept = forcedDept || newNoteDept;
+    const ora = new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+    setNotes((prev) => [
+      {
+        id: Date.now(),
+        reparto: dept,
+        testo: newNoteText.trim(),
+        creatoDa: ROLES.find((r) => r.id === activeRole)?.label || "Operatore",
+        ora,
+      },
+      ...prev,
+    ]);
+    setNewNoteText("");
+    notify(`Nota aggiunta a ${dept}`);
+  };
+
+  const handlePublishBroadcast = (e) => {
+    e.preventDefault();
+    if (!broadcastText.trim()) return;
+    const ora = new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+    setBroadcasts((prev) => [
+      { id: Date.now(), testo: broadcastText.trim(), ora, autore: "Direttore" },
+      ...prev,
+    ]);
+    setBroadcastText("");
+    notify("Comunicazione inviata a tutti i reparti");
+  };
+
+  const salaEmployees = useMemo(() => employees.filter((e) => e.reparto === "SALA"), [employees]);
+  const cucinaEmployees = useMemo(() => employees.filter((e) => e.reparto === "CUCINA"), [employees]);
+  const lavanderiaEmployees = useMemo(
+    () => employees.filter((e) => e.reparto === "LAVANDERIA"),
+    [employees]
+  );
+  const plongeEmployees = useMemo(() => employees.filter((e) => e.reparto === "PLONGE"), [employees]);
+
+  const readyRoomsCount = useMemo(() => rooms.filter((r) => r.pronta).length, [rooms]);
+  const openTicketsCount = useMemo(
+    () => tickets.filter((t) => t.stato !== "RISOLTO").length,
+    [tickets]
+  );
+  const presentCount = useMemo(
+    () => employees.filter((e) => e.stato === "PRESENTE").length,
+    [employees]
+  );
+
+  const renderAttendanceList = (list) => (
+    <div className="space-y-2.5">
+      {list.map((emp) => (
+        <div
+          key={emp.id}
+          className="flex items-center justify-between rounded-xl border border-stone-200/80 bg-stone-50/70 px-3.5 py-2.5"
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="font-semibold text-stone-800">{emp.nome}</span>
+            <span className="text-xs text-stone-400">• {emp.reparto}</span>
+          </div>
+          <AttendancePill stato={emp.stato} onClick={() => cycleAttendance(emp.id)} />
+        </div>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-[#F6F3EE] text-stone-900 font-sans">
+      {toast && (
+        <div className="fixed bottom-5 right-5 z-50 max-w-sm rounded-2xl border border-amber-300/70 bg-stone-900 px-4 py-3 text-sm font-medium text-amber-50 shadow-xl">
+          {toast}
+        </div>
+      )}
+
+      <header className="sticky top-0 z-30 border-b border-stone-200/90 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3.5 sm:px-6">
+          <button
+            type="button"
+            onClick={() => setActiveRole("HOME")}
+            className="flex items-center gap-3 text-left cursor-pointer"
+          >
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-900 text-xl text-amber-50 shadow-sm">
+              🏨
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-bold tracking-tight text-stone-900">
+                  Hotel Operations Hub
+                </span>
+                <span className="hidden rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 sm:inline-block">
+                  LIVE HOTEL
+                </span>
+              </div>
+              <p className="text-xs text-stone-500">
+                Coordinamento operativo reparti • {movimento.data}
+              </p>
+            </div>
+          </button>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-xl bg-stone-100 px-3 py-1.5 font-semibold text-stone-700">
+              👥 Presenti: <strong>{presentCount}</strong>/{employees.length}
+            </span>
+            <span className="rounded-xl bg-emerald-50 px-3 py-1.5 font-semibold text-emerald-800 border border-emerald-200/70">
+              🛏️ Camere pronte: <strong>{readyRoomsCount}</strong>
+            </span>
+            <span className="rounded-xl bg-rose-50 px-3 py-1.5 font-semibold text-rose-800 border border-rose-200/70">
+              🔧 Ticket aperti: <strong>{openTicketsCount}</strong>
+            </span>
+          </div>
+        </div>
+
+        <nav className="border-t border-stone-100 bg-stone-50/80">
+          <div className="mx-auto flex max-w-7xl gap-1.5 overflow-x-auto px-4 py-2 sm:px-6">
+            {ROLES.map((role) => {
+              const active = activeRole === role.id;
+              return (
+                <button
+                  key={role.id}
+                  type="button"
+                  onClick={() => setActiveRole(role.id)}
+                  className={`flex shrink-0 items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold transition cursor-pointer ${
+                    active
+                      ? "bg-amber-900 text-white shadow-sm"
+                      : "bg-white text-stone-700 hover:bg-stone-100 border border-stone-200/70"
+                  }`}
+                >
+                  <span>{role.icon}</span>
+                  <span>{role.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      </header>
+
+      {broadcasts.length > 0 && activeRole !== "HOME" && (
+        <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-amber-300 bg-amber-50/90 px-4 py-2.5 text-xs sm:text-sm text-amber-950">
+            <div className="flex items-center gap-2.5">
+              <span className="font-bold">📢 Direzione ({broadcasts[0].ora}):</span>
+              <span>{broadcasts[0].testo}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveRole("DIRETTORE")}
+              className="shrink-0 font-semibold underline hover:text-amber-800 cursor-pointer"
+            >
+              Vedi avvisi
+            </button>
+          </div>
+        </div>
+      )}
+
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+        {activeRole === "HOME" && (
+          <div className="space-y-6">
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+                <div>
+                  <span className="inline-block rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">
+                    🏨 HOME PAGE
+                  </span>
+                  <h1 className="mt-2 text-2xl font-bold tracking-tight text-stone-900 sm:text-3xl">
+                    Seleziona il tuo reparto
+                  </h1>
+                  <p className="mt-1 text-sm text-stone-600">
+                    Interfaccia semplice e immediata per smartphone, tablet e PC in hotel.
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 gap-2.5 rounded-2xl bg-[#F6F3EE] p-3 text-center">
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase text-stone-500">Arrivi oggi</div>
+                    <div className="text-xl font-extrabold text-stone-900">{movimento.arriviOggi}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase text-stone-500">Partenze oggi</div>
+                    <div className="text-xl font-extrabold text-stone-900">{movimento.partenzeOggi}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase text-stone-500">Ospiti domani</div>
+                    <div className="text-xl font-extrabold text-amber-900">{movimento.ospitiDomani}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {ROLES.filter((r) => r.id !== "HOME").map((role) => (
+                <button
+                  key={role.id}
+                  type="button"
+                  onClick={() => setActiveRole(role.id)}
+                  className="group flex flex-col justify-between rounded-3xl border border-stone-200/80 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-amber-800/40 hover:shadow-md cursor-pointer"
+                >
+                  <div>
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F6F3EE] text-2xl transition group-hover:bg-amber-100">
+                      {role.icon}
+                    </div>
+                    <h2 className="mt-4 text-lg font-bold text-stone-900">{role.label}</h2>
+                    <p className="mt-1 text-sm text-stone-600">{role.desc}</p>
+                  </div>
+                  <div className="mt-5 flex items-center justify-between border-t border-stone-100 pt-3 text-xs font-semibold text-amber-900">
+                    <span>Apri schermata</span>
+                    <span>→</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeRole === "RECEPTION" && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <div>
+                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">
+                  🛎️ RECEPTION
+                </span>
+                <h1 className="mt-2 text-2xl font-bold text-stone-900">
+                  Movimento Ospiti & Coperti Domani
+                </h1>
+                <p className="text-sm text-stone-500">
+                  I coperti di domani vengono ricevuti automaticamente da Sala Ristorante e Cucina.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMaintModal(true)}
+                className="inline-flex items-center gap-2 rounded-2xl bg-amber-900 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-amber-800 cursor-pointer"
+              >
+                <span>🔧</span>
+                <span>NUOVA MANUTENZIONE</span>
+              </button>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="rounded-3xl border border-stone-200/80 bg-white p-5 shadow-sm">
+                <div className="text-xs font-bold uppercase tracking-wider text-stone-500">
+                  Arrivi Oggi
+                </div>
+                <div className="mt-2 text-4xl font-black text-stone-900">{movimento.arriviOggi}</div>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMovimento((m) => ({ ...m, arriviOggi: Math.max(0, m.arriviOggi - 1) }))
+                    }
+                    className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-bold hover:bg-stone-200 cursor-pointer"
+                  >
+                    -1
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMovimento((m) => ({ ...m, arriviOggi: m.arriviOggi + 1 }))}
+                    className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-bold hover:bg-stone-200 cursor-pointer"
+                  >
+                    +1
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-stone-200/80 bg-white p-5 shadow-sm">
+                <div className="text-xs font-bold uppercase tracking-wider text-stone-500">
+                  Partenze Oggi
+                </div>
+                <div className="mt-2 text-4xl font-black text-stone-900">{movimento.partenzeOggi}</div>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMovimento((m) => ({ ...m, partenzeOggi: Math.max(0, m.partenzeOggi - 1) }))
+                    }
+                    className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-bold hover:bg-stone-200 cursor-pointer"
+                  >
+                    -1
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMovimento((m) => ({ ...m, partenzeOggi: m.partenzeOggi + 1 }))}
+                    className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-bold hover:bg-stone-200 cursor-pointer"
+                  >
+                    +1
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-amber-300/80 bg-amber-50/60 p-5 shadow-sm">
+                <div className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                  Ospiti Domani
+                </div>
+                <div className="mt-2 text-4xl font-black text-amber-950">{movimento.ospitiDomani}</div>
+                <div className="mt-2 text-xs text-amber-800">Previsione totale in casa</div>
+              </div>
+
+              <div className="rounded-3xl border border-stone-200/80 bg-white p-5 shadow-sm">
+                <div className="text-xs font-bold uppercase tracking-wider text-stone-500">
+                  Colazioni Domani
+                </div>
+                <div className="mt-2 text-4xl font-black text-emerald-800">
+                  {movimento.colazioniDomani}
+                </div>
+                <div className="mt-2 text-xs font-medium text-emerald-700">✅ Sincronizzato</div>
+              </div>
+
+              <div className="rounded-3xl border border-stone-200/80 bg-white p-5 shadow-sm">
+                <div className="text-xs font-bold uppercase tracking-wider text-stone-500">
+                  Pranzi / Cene Domani
+                </div>
+                <div className="mt-2 flex items-baseline gap-3">
+                  <div>
+                    <span className="text-xs text-stone-500">Pranzi </span>
+                    <span className="text-2xl font-black text-stone-900">{movimento.pranziDomani}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-stone-500">Cene </span>
+                    <span className="text-2xl font-black text-stone-900">{movimento.ceneDomani}</span>
+                  </div>
+                </div>
+                <div className="mt-2 text-xs font-medium text-emerald-700">✅ Sincronizzato</div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-stone-900">Segnalazioni Manutenzione Attive</h2>
+                <button
+                  type="button"
+                  onClick={() => setActiveRole("MANUTENZIONE")}
+                  className="text-xs font-semibold text-amber-900 underline cursor-pointer"
+                >
+                  Apri reparto Manutenzione →
+                </button>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {tickets.map((t) => (
+                  <div
+                    key={t.id}
+                    className="flex items-center justify-between rounded-2xl border border-stone-200/80 bg-stone-50 p-4"
+                  >
+                    <div>
+                      <div className="text-sm font-bold text-stone-900">
+                        {t.codice} Camera {t.camera}
+                      </div>
+                      <div className="text-xs text-stone-600">{t.descrizione}</div>
+                    </div>
+                    <StatusBadge stato={t.stato} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeRole === "SALA" && (
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">
+                🍽️ SALA RISTORANTE
+              </span>
+              <h2 className="mt-2 text-xl font-bold text-stone-900">Dipendenti & Presenze</h2>
+              <p className="mb-4 text-xs text-stone-500">Tocca lo stato per aggiornarlo subito.</p>
+              {renderAttendanceList(salaEmployees)}
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-bold text-stone-900">Note Sala</h2>
+              <div className="mt-4 space-y-2.5">
+                {notes
+                  .filter((n) => n.reparto === "SALA")
+                  .map((n) => (
+                    <div
+                      key={n.id}
+                      className="rounded-2xl border border-amber-200/70 bg-amber-50/50 px-4 py-3 text-sm font-medium text-stone-800"
+                    >
+                      <div className="font-semibold">{n.testo}</div>
+                      <div className="mt-0.5 text-[11px] text-stone-500">
+                        {n.creatoDa} • {n.ora}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+
+              <form onSubmit={(e) => handleAddNote(e, "SALA")} className="mt-4 flex gap-2">
+                <input
+                  type="text"
+                  value={newNoteText}
+                  onChange={(e) => setNewNoteText(e.target.value)}
+                  placeholder="Nuova nota sala..."
+                  className="flex-1 rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-amber-800 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  className="rounded-xl bg-amber-900 px-4 py-2 text-xs font-bold text-white hover:bg-amber-800 cursor-pointer"
+                >
+                  Aggiungi
+                </button>
+              </form>
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-bold text-stone-900">Coperti Domani</h2>
+              <p className="mt-1 text-xs text-stone-500">
+                Riceve automaticamente Colazioni, Pranzi e Cene dalla Reception.
+              </p>
+
+              <div className="mt-5 space-y-3">
+                <div className="flex items-center justify-between rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+                  <span className="font-semibold text-emerald-950">✅ Colazioni</span>
+                  <span className="text-2xl font-black text-emerald-900">
+                    {movimento.colazioniDomani}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+                  <span className="font-semibold text-emerald-950">✅ Pranzi</span>
+                  <span className="text-2xl font-black text-emerald-900">
+                    {movimento.pranziDomani}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+                  <span className="font-semibold text-emerald-950">✅ Cene</span>
+                  <span className="text-2xl font-black text-emerald-900">
+                    {movimento.ceneDomani}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeRole === "CUCINA" && (
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">
+                👨‍🍳 CUCINA
+              </span>
+              <h2 className="mt-2 text-xl font-bold text-stone-900">Presenze Cucina</h2>
+              <p className="mb-4 text-xs text-stone-500">Stessa gestione rapida della Sala.</p>
+              {renderAttendanceList(cucinaEmployees)}
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-xl font-bold text-stone-900">Menu</h2>
+                <div className="flex rounded-xl bg-stone-100 p-1 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setMenuTab("oggi")}
+                    className={`rounded-lg px-3 py-1 cursor-pointer ${
+                      menuTab === "oggi" ? "bg-amber-900 text-white" : "text-stone-600"
+                    }`}
+                  >
+                    Giornaliero
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMenuTab("domani")}
+                    className={`rounded-lg px-3 py-1 cursor-pointer ${
+                      menuTab === "domani" ? "bg-amber-900 text-white" : "text-stone-600"
+                    }`}
+                  >
+                    Domani
+                  </button>
+                </div>
+              </div>
+              <p className="mt-1 text-xs text-stone-500">
+                Compilabile anche con giorni di anticipo.
+              </p>
+
+              <div className="mt-4 space-y-3">
+                <div className="rounded-2xl border border-stone-200/80 bg-stone-50 p-3.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
+                    PRIMO
+                  </div>
+                  <input
+                    type="text"
+                    value={menus[menuTab].primi}
+                    onChange={(e) =>
+                      setMenus((prev) => ({
+                        ...prev,
+                        [menuTab]: { ...prev[menuTab], primi: e.target.value },
+                      }))
+                    }
+                    className="mt-1 w-full bg-transparent text-sm font-semibold text-stone-900 focus:outline-none"
+                  />
+                </div>
+
+                <div className="rounded-2xl border border-stone-200/80 bg-stone-50 p-3.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
+                    SECONDO
+                  </div>
+                  <input
+                    type="text"
+                    value={menus[menuTab].secondi}
+                    onChange={(e) =>
+                      setMenus((prev) => ({
+                        ...prev,
+                        [menuTab]: { ...prev[menuTab], secondi: e.target.value },
+                      }))
+                    }
+                    className="mt-1 w-full bg-transparent text-sm font-semibold text-stone-900 focus:outline-none"
+                  />
+                </div>
+
+                <div className="rounded-2xl border border-stone-200/80 bg-stone-50 p-3.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
+                    CONTORNO
+                  </div>
+                  <input
+                    type="text"
+                    value={menus[menuTab].contorni}
+                    onChange={(e) =>
+                      setMenus((prev) => ({
+                        ...prev,
+                        [menuTab]: { ...prev[menuTab], contorni: e.target.value },
+                      }))
+                    }
+                    className="mt-1 w-full bg-transparent text-sm font-semibold text-stone-900 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-bold text-stone-900">Note & Intolleranze</h2>
+              <div className="mt-4 space-y-2.5">
+                {notes
+                  .filter((n) => n.reparto === "CUCINA")
+                  .map((n) => (
+                    <div
+                      key={n.id}
+                      className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-semibold text-stone-800"
+                    >
+                      {n.testo}
+                    </div>
+                  ))}
+              </div>
+              <form onSubmit={(e) => handleAddNote(e, "CUCINA")} className="mt-4 flex gap-2">
+                <input
+                  type="text"
+                  value={newNoteText}
+                  onChange={(e) => setNewNoteText(e.target.value)}
+                  placeholder="Es. 2 Senza glutine..."
+                  className="flex-1 rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-amber-800 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  className="rounded-xl bg-amber-900 px-4 py-2 text-xs font-bold text-white hover:bg-amber-800 cursor-pointer"
+                >
+                  Salva
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {activeRole === "LAVANDERIA" && (
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">
+                🧺 LAVANDERIA & SPAZI COMUNI
+              </span>
+              <h2 className="mt-2 text-xl font-bold text-stone-900">Presenze</h2>
+              <div className="mb-4 flex flex-wrap gap-1.5 text-[11px] text-stone-500">
+                {ATTENDANCE_OPTIONS.map((a) => (
+                  <span key={a.key}>
+                    {a.icon} {a.label}
+                  </span>
+                ))}
+              </div>
+              {renderAttendanceList(lavanderiaEmployees)}
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-bold text-stone-900">Camere Pronte</h2>
+              <form onSubmit={handleMarkRoomReady} className="mt-3 flex gap-2">
+                <input
+                  type="text"
+                  value={roomInput}
+                  onChange={(e) => setRoomInput(e.target.value)}
+                  placeholder="N° camera (es. 205)"
+                  className="flex-1 rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-amber-800 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  className="rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-800 cursor-pointer"
+                >
+                  ✅ CAMERA PRONTA
+                </button>
+              </form>
+              <p className="mt-1.5 text-[11px] text-stone-500">
+                Notifica automaticamente Reception e Direttore.
+              </p>
+
+              <div className="mt-4 grid grid-cols-2 gap-2.5">
+                {rooms.map((room) => (
+                  <button
+                    key={room.numero}
+                    type="button"
+                    onClick={() => toggleRoomReady(room.numero)}
+                    className={`flex items-center justify-between rounded-2xl border px-4 py-3 text-left transition cursor-pointer ${
+                      room.pronta
+                        ? "border-emerald-200 bg-emerald-50/80 text-emerald-950"
+                        : "border-stone-200 bg-stone-50 text-stone-600"
+                    }`}
+                  >
+                    <span className="text-base font-extrabold">{room.numero}</span>
+                    <span className="text-sm font-bold">{room.pronta ? "✅" : "⏳"}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-bold text-stone-900">Spazi Comuni</h2>
+              <div className="mt-4 space-y-2.5">
+                {commonAreas.map((area) => (
+                  <button
+                    key={area.id}
+                    type="button"
+                    onClick={() => toggleCommonArea(area.id)}
+                    className="flex w-full items-center justify-between rounded-2xl border border-stone-200/80 bg-stone-50 px-4 py-3.5 text-sm font-semibold text-stone-900 hover:bg-stone-100 cursor-pointer"
+                  >
+                    <span>{area.nome}</span>
+                    <span>{area.pronta ? "✅" : "⏳"}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeRole === "MANUTENZIONE" && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <div>
+                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">
+                  🔧 MANUTENZIONE
+                </span>
+                <h1 className="mt-2 text-2xl font-bold text-stone-900">Ticket Manutenzione</h1>
+                <p className="text-sm text-stone-500">
+                  Riceve automaticamente le richieste provenienti dalla Reception. Tocca lo stato per avanzare.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMaintModal(true)}
+                className="rounded-2xl bg-amber-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-amber-800 cursor-pointer"
+              >
+                + Nuovo Ticket
+              </button>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              {tickets.map((t) => (
+                <div
+                  key={t.id}
+                  className="flex flex-col justify-between rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-base font-black text-stone-900">
+                        {t.codice} Camera {t.camera}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => advanceTicketStatus(t.id)}
+                        className="cursor-pointer"
+                        title="Clicca per cambiare stato"
+                      >
+                        <StatusBadge stato={t.stato} />
+                      </button>
+                    </div>
+                    <p className="mt-3 text-base font-medium text-stone-700">{t.descrizione}</p>
+                  </div>
+                  <div className="mt-5 flex items-center justify-between border-t border-stone-100 pt-3 text-xs text-stone-500">
+                    <span>Origine: {t.origine}</span>
+                    <span>{t.dataApertura}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeRole === "PLONGE" && (
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">
+                🍴 PLONGE
+              </span>
+              <h2 className="mt-2 text-xl font-bold text-stone-900">Presenze Essenziali</h2>
+              <p className="mb-4 text-xs text-stone-500">Schermata essenziale e veloce.</p>
+              {renderAttendanceList(plongeEmployees)}
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-bold text-stone-900">Note Plonge</h2>
+              <div className="mt-4 space-y-2.5">
+                {notes
+                  .filter((n) => n.reparto === "PLONGE")
+                  .map((n) => (
+                    <div
+                      key={n.id}
+                      className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-semibold text-stone-800"
+                    >
+                      {n.testo}
+                    </div>
+                  ))}
+              </div>
+              <form onSubmit={(e) => handleAddNote(e, "PLONGE")} className="mt-4 flex gap-2">
+                <input
+                  type="text"
+                  value={newNoteText}
+                  onChange={(e) => setNewNoteText(e.target.value)}
+                  placeholder="Aggiungi nota plonge..."
+                  className="flex-1 rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-amber-800 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  className="rounded-xl bg-amber-900 px-4 py-2 text-xs font-bold text-white hover:bg-amber-800 cursor-pointer"
+                >
+                  Aggiungi
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {activeRole === "DIRETTORE" && (
+          <div className="space-y-6">
+            <div className="rounded-3xl border border-amber-900/20 bg-gradient-to-r from-stone-900 via-stone-800 to-amber-950 p-6 text-white shadow-md">
+              <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-amber-200">
+                👔 DIRETTORE • CUORE DELL&apos;APP
+              </span>
+              <h1 className="mt-2 text-2xl font-bold sm:text-3xl">
+                Controllo Generale Hotel & Comunicazioni
+              </h1>
+              <p className="mt-1 text-sm text-stone-300">
+                Presenze, note, menu, camere pronte, ticket, movimento ospiti, modifica dati, storico e avvisi.
+              </p>
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-stone-900">📢 Comunicazioni a tutti i reparti</h2>
+              <form onSubmit={handlePublishBroadcast} className="mt-3 flex flex-col gap-2.5 sm:flex-row">
+                <input
+                  type="text"
+                  value={broadcastText}
+                  onChange={(e) => setBroadcastText(e.target.value)}
+                  placeholder="Scrivi un avviso visibile a tutti i reparti..."
+                  className="flex-1 rounded-xl border border-stone-300 px-4 py-2.5 text-sm focus:border-amber-800 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  className="rounded-xl bg-amber-900 px-5 py-2.5 text-sm font-bold text-white hover:bg-amber-800 cursor-pointer"
+                >
+                  Invia a tutti
+                </button>
+              </form>
+              <div className="mt-4 space-y-2">
+                {broadcasts.map((b) => (
+                  <div
+                    key={b.id}
+                    className="flex items-center justify-between rounded-2xl bg-amber-50 px-4 py-2.5 text-sm text-amber-950 border border-amber-200/70"
+                  >
+                    <span>
+                      <strong>{b.autore}:</strong> {b.testo}
+                    </span>
+                    <span className="text-xs text-amber-800">{b.ora}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-stone-900">
+                ✏️ Arrivi, Partenze & Coperti (Modifica Diretta)
+              </h2>
+              <div className="mt-4 grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
+                {[
+                  { key: "arriviOggi", label: "Arrivi Oggi" },
+                  { key: "partenzeOggi", label: "Partenze Oggi" },
+                  { key: "ospitiDomani", label: "Ospiti Domani" },
+                  { key: "colazioniDomani", label: "Colazioni Domani" },
+                  { key: "pranziDomani", label: "Pranzi Domani" },
+                  { key: "ceneDomani", label: "Cene Domani" },
+                ].map((field) => (
+                  <div key={field.key} className="rounded-2xl bg-stone-50 p-3.5 border border-stone-200/80">
+                    <label className="block text-[11px] font-bold uppercase text-stone-500">
+                      {field.label}
+                    </label>
+                    <input
+                      type="number"
+                      value={movimento[field.key]}
+                      onChange={(e) =>
+                        setMovimento((prev) => ({
+                          ...prev,
+                          [field.key]: Number(e.target.value) || 0,
+                        }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-lg font-extrabold text-stone-900"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-lg font-bold text-stone-900">
+                  ✅ Tutte le presenze di tutti i reparti
+                </h2>
+                <select
+                  value={directorDeptFilter}
+                  onChange={(e) => setDirectorDeptFilter(e.target.value)}
+                  className="rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-xs font-bold text-stone-700"
+                >
+                  <option value="TUTTI">Tutti i reparti</option>
+                  <option value="SALA">Sala</option>
+                  <option value="CUCINA">Cucina</option>
+                  <option value="LAVANDERIA">Lavanderia</option>
+                  <option value="MANUTENZIONE">Manutenzione</option>
+                  <option value="PLONGE">Plonge</option>
+                </select>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {employees
+                  .filter((e) => directorDeptFilter === "TUTTI" || e.reparto === directorDeptFilter)
+                  .map((emp) => (
+                    <div
+                      key={emp.id}
+                      className="flex items-center justify-between rounded-2xl border border-stone-200/80 bg-stone-50 px-4 py-3"
+                    >
+                      <div>
+                        <div className="font-bold text-stone-900">{emp.nome}</div>
+                        <div className="text-xs text-stone-500">{emp.reparto}</div>
+                      </div>
+                      <select
+                        value={emp.stato}
+                        onChange={(e) => setAttendanceDirect(emp.id, e.target.value)}
+                        className="rounded-xl border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-semibold"
+                      >
+                        {ATTENDANCE_OPTIONS.map((opt) => (
+                          <option key={opt.key} value={opt.key}>
+                            {opt.icon} {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+                <h2 className="text-lg font-bold text-stone-900">🍽️ Tutti i Menu & Note Reparti</h2>
+                <div className="mt-3 rounded-2xl bg-stone-50 p-4 text-sm space-y-1.5 border border-stone-200/70">
+                  <div className="font-bold text-amber-900">Menu Oggi</div>
+                  <div>Primo: {menus.oggi.primi}</div>
+                  <div>Secondo: {menus.oggi.secondi}</div>
+                  <div>Contorno: {menus.oggi.contorni}</div>
+                  <div className="pt-2 font-bold text-amber-900">Menu Domani</div>
+                  <div>Primo: {menus.domani.primi}</div>
+                  <div>Secondo: {menus.domani.secondi}</div>
+                  <div>Contorno: {menus.domani.contorni}</div>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {notes.map((n) => (
+                    <div
+                      key={n.id}
+                      className="flex items-center justify-between rounded-xl border border-stone-200/80 px-3.5 py-2 text-xs"
+                    >
+                      <span>
+                        <strong className="text-amber-900">[{n.reparto}]</strong> {n.testo}
+                      </span>
+                      <span className="text-stone-400">{n.ora}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+                  <h2 className="text-lg font-bold text-stone-900">🛏️ Camere Pronte</h2>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {rooms.map((r) => (
+                      <span
+                        key={r.numero}
+                        className={`rounded-xl px-3 py-1.5 text-xs font-bold ${
+                          r.pronta
+                            ? "bg-emerald-100 text-emerald-900"
+                            : "bg-stone-100 text-stone-500"
+                        }`}
+                      >
+                        {r.numero} {r.pronta ? "✅" : "⏳"}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+                  <h2 className="text-lg font-bold text-stone-900">🔧 Ticket Manutenzione</h2>
+                  <div className="mt-3 space-y-2.5">
+                    {tickets.map((t) => (
+                      <div
+                        key={t.id}
+                        className="flex items-center justify-between rounded-2xl border border-stone-200 bg-stone-50 p-3.5"
+                      >
+                        <div>
+                          <div className="text-sm font-bold">
+                            {t.codice} Camera {t.camera} — {t.descrizione}
+                          </div>
+                          <div className="text-xs text-stone-500">{t.dataApertura}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => advanceTicketStatus(t.id)}
+                          className="cursor-pointer"
+                        >
+                          <StatusBadge stato={t.stato} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-stone-200/80 bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-stone-900">📅 Storico Giornaliero</h2>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-stone-200 text-xs uppercase text-stone-500">
+                      <th className="py-2.5 pr-4">Giorno</th>
+                      <th className="py-2.5 pr-4">Arrivi</th>
+                      <th className="py-2.5 pr-4">Partenze</th>
+                      <th className="py-2.5 pr-4">Colazioni</th>
+                      <th className="py-2.5 pr-4">Pranzi</th>
+                      <th className="py-2.5 pr-4">Cene</th>
+                      <th className="py-2.5 pr-4">Camere Pronte</th>
+                      <th className="py-2.5">Sintesi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {history.map((h, i) => (
+                      <tr key={i}>
+                        <td className="py-3 pr-4 font-bold text-stone-900">{h.data}</td>
+                        <td className="py-3 pr-4">{h.arrivi}</td>
+                        <td className="py-3 pr-4">{h.partenze}</td>
+                        <td className="py-3 pr-4">{h.colazioni}</td>
+                        <td className="py-3 pr-4">{h.pranzi}</td>
+                        <td className="py-3 pr-4">{h.cene}</td>
+                        <td className="py-3 pr-4 font-semibold text-emerald-800">
+                          {h.camerePronte} ✅
+                        </td>
+                        <td className="py-3 text-stone-600">{h.sintesi}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {showMaintModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/50 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-3xl border border-stone-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-stone-900">🔧 Nuova Segnalazione Manutenzione</h3>
+              <button
+                type="button"
+                onClick={() => setShowMaintModal(false)}
+                className="rounded-lg px-2 py-1 text-sm font-bold text-stone-500 hover:bg-stone-100 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleCreateTicket} className="mt-4 space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase text-stone-600">
+                  Numero Camera
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newTicketRoom}
+                  onChange={(e) => setNewTicketRoom(e.target.value)}
+                  placeholder="Es. 118"
+                  className="mt-1 w-full rounded-xl border border-stone-300 px-3.5 py-2.5 text-sm focus:border-amber-800 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase text-stone-600">
+                  Descrizione Problema
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  value={newTicketDesc}
+                  onChange={(e) => setNewTicketDesc(e.target.value)}
+                  placeholder="Es. Climatizzatore non funzionante..."
+                  className="mt-1 w-full rounded-xl border border-stone-300 px-3.5 py-2.5 text-sm focus:border-amber-800 focus:outline-none"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMaintModal(false)}
+                  className="rounded-xl border border-stone-300 px-4 py-2 text-xs font-bold text-stone-700 hover:bg-stone-50 cursor-pointer"
+                >
+                  Annulla
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-amber-900 px-5 py-2 text-xs font-bold text-white hover:bg-amber-800 cursor-pointer"
+                >
+                  Invia Ticket
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
