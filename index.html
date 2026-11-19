@@ -27,7 +27,165 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    const STORAGE_KEY = "red_sun_2027_hub_v1";
+    const STORAGE_KEY = "red_sun_2027_hub_v2";
+
+    const OFFICE_THEME_COLORS = {
+      0: "#FFFFFF",
+      1: "#0F172A",
+      2: "#E2E8F0",
+      3: "#1E293B",
+      4: "#2563EB",
+      5: "#059669",
+      6: "#475569",
+      7: "#7C3AED",
+      8: "#0891B2",
+      9: "#EA580C"
+    };
+
+    function applyTintToHex(hex, tint) {
+      if (!hex || typeof tint !== "number" || tint === 0) return hex;
+      const clean = hex.replace("#", "");
+      let r = parseInt(clean.slice(0, 2), 16);
+      let g = parseInt(clean.slice(2, 4), 16);
+      let b = parseInt(clean.slice(4, 6), 16);
+
+      if (tint < 0) {
+        const factor = 1 + tint;
+        r = Math.round(r * factor);
+        g = Math.round(g * factor);
+        b = Math.round(b * factor);
+      } else {
+        r = Math.round(r + (255 - r) * tint);
+        g = Math.round(g + (255 - g) * tint);
+        b = Math.round(b + (255 - b) * tint);
+      }
+
+      const toHex = (n) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0");
+      return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+    }
+
+    function excelColorToCss(colorObj, fallback = null) {
+      if (!colorObj) return fallback;
+      if (colorObj.argb) {
+        const hex = String(colorObj.argb).replace(/^#/, "");
+        if (hex.length === 8) {
+          const alpha = hex.slice(0, 2);
+          const rgb = hex.slice(2);
+          if (alpha === "00") return fallback;
+          return applyTintToHex(`#${rgb}`, colorObj.tint);
+        }
+        if (hex.length === 6) return applyTintToHex(`#${hex}`, colorObj.tint);
+      }
+      if (typeof colorObj.theme === "number") {
+        const baseHex = OFFICE_THEME_COLORS[colorObj.theme];
+        if (baseHex) return applyTintToHex(baseHex, colorObj.tint);
+      }
+      return fallback;
+    }
+
+    function borderSideToCss(side) {
+      if (!side || !side.style) return "1px solid #e2e8f0";
+      const color = excelColorToCss(side.color, "#94a3b8");
+      const map = {
+        thin: "1px solid",
+        medium: "2px solid",
+        thick: "3px solid",
+        double: "3px double",
+        dotted: "1px dotted",
+        dashed: "1px dashed",
+        hair: "1px solid"
+      };
+      return `${map[side.style] || "1px solid"} ${color}`;
+    }
+
+    function cellToDisplayValue(cell) {
+      if (!cell || cell.value === null || cell.value === undefined) return "";
+      const v = cell.value;
+      if (typeof v === "object") {
+        if (v.text !== undefined) return String(v.text);
+        if (Array.isArray(v.richText)) return v.richText.map((part) => part.text || "").join("");
+        if (v.result !== undefined && v.result !== null) return String(v.result);
+        if (v.formula) return v.result !== undefined ? String(v.result) : `=${v.formula}`;
+      }
+      return String(v);
+    }
+
+    function extractExcelJsStyle(cell, isFirstRow) {
+      const style = {
+        backgroundColor: isFirstRow ? "#f8fafc" : "#ffffff",
+        color: "#0f172a",
+        fontWeight: isFirstRow ? "600" : "400",
+        fontStyle: "normal",
+        textDecoration: "none",
+        textAlign: "left",
+        verticalAlign: "middle",
+        fontSize: "13px",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        borderTop: "1px solid #e2e8f0",
+        borderRight: "1px solid #e2e8f0",
+        borderBottom: "1px solid #e2e8f0",
+        borderLeft: "1px solid #e2e8f0"
+      };
+
+      if (!cell) return style;
+      if (typeof cell.value === "number") style.textAlign = "right";
+
+      const fill = cell.fill;
+      if (fill && fill.type === "pattern" && fill.pattern && fill.pattern !== "none") {
+        const fg = excelColorToCss(fill.fgColor, null);
+        if (fg) style.backgroundColor = fg;
+      }
+
+      const font = cell.font || {};
+      const fontColor = excelColorToCss(font.color, null);
+      if (fontColor) style.color = fontColor;
+      if (font.bold) style.fontWeight = "700";
+      if (font.italic) style.fontStyle = "italic";
+      if (font.underline) style.textDecoration = "underline";
+      if (font.size) {
+        const px = Math.round(Number(font.size) * 1.33);
+        if (!Number.isNaN(px) && px > 0) {
+          style.fontSize = `${Math.min(28, Math.max(11, px))}px`;
+        }
+      }
+
+      const align = cell.alignment || {};
+      if (align.horizontal && ["left", "center", "right"].includes(align.horizontal)) {
+        style.textAlign = align.horizontal;
+      }
+      if (align.vertical && ["top", "middle", "bottom"].includes(align.vertical)) {
+        style.verticalAlign = align.vertical;
+      }
+
+      const b = cell.border || {};
+      if (b.top && b.top.style) style.borderTop = borderSideToCss(b.top);
+      if (b.right && b.right.style) style.borderRight = borderSideToCss(b.right);
+      if (b.bottom && b.bottom.style) style.borderBottom = borderSideToCss(b.bottom);
+      if (b.left && b.left.style) style.borderLeft = borderSideToCss(b.left);
+
+      return style;
+    }
+
+    function parseMergeRange(rangeStr) {
+      const parts = rangeStr.split(":");
+      if (parts.length !== 2) return null;
+      const parseCoord = (ref) => {
+        const match = ref.match(/^([A-Z]+)(\d+)$/i);
+        if (!match) return null;
+        const colLetters = match[1].toUpperCase();
+        const rowNum = parseInt(match[2], 10) - 1;
+        let colNum = 0;
+        for (let i = 0; i < colLetters.length; i++) {
+          colNum = colNum * 26 + (colLetters.charCodeAt(i) - 64);
+        }
+        return { r: rowNum, c: colNum - 1 };
+      };
+      const s = parseCoord(parts[0]);
+      const e = parseCoord(parts[1]);
+      if (!s || !e) return null;
+      return { s, e };
+    }
 
     const INITIAL_ITEMS = [
       {
@@ -186,7 +344,14 @@
       const [onlyLinked, setOnlyLinked] = useState(false);
       const [activeId, setActiveId] = useState(null);
       const [sheetZoom, setSheetZoom] = useState(100);
+      const [sheetNames, setSheetNames] = useState([]);
+      const [currentSheet, setCurrentSheet] = useState("");
       const [gridData, setGridData] = useState([]);
+      const [cellStyles, setCellStyles] = useState([]);
+      const [merges, setMerges] = useState([]);
+      const [colWidths, setColWidths] = useState([]);
+      const [rowHeights, setRowHeights] = useState([]);
+      const [copiedBoxPath, setCopiedBoxPath] = useState("");
       const [statusMsg, setStatusMsg] = useState("");
       const fileInputRefs = useRef({});
 
@@ -198,64 +363,164 @@
 
       const notify = (msg) => {
         setStatusMsg(msg);
-        setTimeout(() => setStatusMsg((p) => (p === msg ? "" : p)), 3000);
+        setTimeout(() => setStatusMsg((p) => (p === msg ? "" : p)), 3500);
       };
 
       const copyPath = async (relPath, title) => {
         if (!relPath) {
-          notify(`Nessun link ancora assegnato a "${title}".`);
+          notify(`Nessun percorso impostato per "${title}".`);
           return;
         }
+        setCopiedBoxPath(relPath);
         try {
-          await navigator.clipboard.writeText(relPath);
-          notify(`Copiato percorso: ${relPath}`);
-        } catch (e) {
-          notify(`Percorso: ${relPath}`);
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(relPath);
+            notify(`Copiato negli appunti: ${relPath}`);
+            return;
+          }
+        } catch (e) {}
+
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = relPath;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          notify(`Copiato: ${relPath}`);
+        } catch (e2) {
+          notify("Percorso pronto nella barra in alto: premi Ctrl+C per copiarlo.");
         }
       };
 
-      const handleFileUpload = (id, file) => {
+      const downloadBatLauncher = (item) => {
+        const safeName =
+          item.title
+            .replace(/[\\/:*?"<>|]+/g, "_")
+            .replace(/\s+/g, "_") || "Scheda";
+        const target = item.relPath ? item.relPath : `${safeName}.xlsx`;
+        const batContent = [
+          "@echo off",
+          "chcp 65001 >nul",
+          `start "" "${target}"`,
+          "exit"
+        ].join("\r\n");
+
+        const blob = new Blob([batContent], { type: "application/bat;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `Avvia_${safeName}.bat`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        notify(`Creato comando "Avvia_${safeName}.bat" (mettilo nella cartella principale e fai doppio clic).`);
+      };
+
+      const handleFileUpload = async (id, file) => {
         if (!file) return;
         const reader = new FileReader();
         reader.onload = async (e) => {
-          const bytes = new Uint8Array(e.target.result);
-          const b64 = uint8ArrayToBase64(bytes);
-          setItems((prev) =>
-            prev.map((it) =>
-              it.id === id
-                ? {
-                    ...it,
-                    hasFile: true,
-                    workbookBase64: b64,
-                    relPath: it.relPath || `RED SUN 2027\\${file.name}`
-                  }
-                : it
-            )
-          );
-          notify(`File "${file.name}" caricato per l'anteprima.`);
+          try {
+            const bytes = new Uint8Array(e.target.result);
+            const wb = new ExcelJS.Workbook();
+            await wb.xlsx.load(bytes.buffer);
+            const b64 = uint8ArrayToBase64(bytes);
+
+            setItems((prev) =>
+              prev.map((it) =>
+                it.id === id
+                  ? {
+                      ...it,
+                      hasFile: true,
+                      workbookBase64: b64,
+                      relPath: it.relPath || `RED SUN 2027\\${file.name}`
+                    }
+                  : it
+              )
+            );
+            notify(`Caricato "${file.name}" — clicca Anteprima per vederlo.`);
+          } catch (err) {
+            notify("Impossibile leggere il file: usa un file .xlsx valido.");
+          }
         };
         reader.readAsArrayBuffer(file);
+      };
+
+      const loadSheetFromBase64 = async (b64, targetSheet = null) => {
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(base64ToUint8Array(b64).buffer);
+        const names = wb.worksheets.map((ws) => ws.name);
+        const chosen = targetSheet && names.includes(targetSheet) ? targetSheet : names[0] || "Foglio1";
+        const ws = wb.getWorksheet(chosen) || wb.worksheets[0];
+
+        const maxRows = Math.max(10, ws.rowCount || 10);
+        const maxCols = Math.max(4, ws.columnCount || 4);
+
+        const normalized = [];
+        const stylesMatrix = [];
+        const rowsInfo = [];
+
+        for (let r = 1; r <= maxRows; r++) {
+          const row = ws.getRow(r);
+          const rowVals = [];
+          const rowSts = [];
+          rowsInfo.push(Math.max(30, Math.min(120, (row.height || 22) * 1.4)));
+
+          for (let c = 1; c <= maxCols; c++) {
+            const cell = row.getCell(c);
+            rowVals.push(cellToDisplayValue(cell));
+            rowSts.push(extractExcelJsStyle(cell, r === 1));
+          }
+          normalized.push(rowVals);
+          stylesMatrix.push(rowSts);
+        }
+
+        const colsInfo = Array.from({ length: maxCols }, (_, idx) => {
+          const col = ws.getColumn(idx + 1);
+          return Math.max(120, Math.min(400, ((col && col.width) || 18) * 9.5));
+        });
+
+        const parsedMerges = [];
+        if (ws._merges) {
+          Object.keys(ws._merges).forEach((rangeStr) => {
+            const parsed = parseMergeRange(rangeStr);
+            if (parsed) parsedMerges.push(parsed);
+          });
+        }
+
+        setSheetNames(names.length ? names : ["Foglio1"]);
+        setCurrentSheet(chosen);
+        setGridData(normalized);
+        setCellStyles(stylesMatrix);
+        setMerges(parsedMerges);
+        setColWidths(colsInfo);
+        setRowHeights(rowsInfo);
       };
 
       const openPreview = async (item) => {
         setActiveId(item.id);
         setSheetZoom(100);
-        const wb = new ExcelJS.Workbook();
         const b64 = item.workbookBase64 || (await buildEmptyBase64());
-        await wb.xlsx.load(base64ToUint8Array(b64).buffer);
-        const ws = wb.worksheets[0];
-        const rows = [];
-        const maxR = Math.max(10, ws.rowCount || 10);
-        const maxC = Math.max(4, ws.columnCount || 4);
-        for (let r = 1; r <= maxR; r++) {
-          const rowArr = [];
-          for (let c = 1; c <= maxC; c++) {
-            const val = ws.getRow(r).getCell(c).value;
-            rowArr.push(val === null || val === undefined ? "" : String(typeof val === "object" ? (val.result ?? val.text ?? "") : val));
+        await loadSheetFromBase64(b64);
+      };
+
+      const getMergeSpan = (rIdx, cIdx) => {
+        if (!merges || merges.length === 0) return { rowSpan: 1, colSpan: 1, hidden: false };
+        for (const m of merges) {
+          const { s, e } = m;
+          if (rIdx === s.r && cIdx === s.c) {
+            return { rowSpan: e.r - s.r + 1, colSpan: e.c - s.c + 1, hidden: false };
           }
-          rows.push(rowArr);
+          if (rIdx >= s.r && rIdx <= e.r && cIdx >= s.c && cIdx <= e.c) {
+            return { rowSpan: 1, colSpan: 1, hidden: true };
+          }
         }
-        setGridData(rows);
+        return { rowSpan: 1, colSpan: 1, hidden: false };
       };
 
       const addNewCard = () => {
@@ -304,6 +569,22 @@
               </div>
             )}
 
+            {copiedBoxPath && (
+              <div className="rounded-2xl bg-white border border-emerald-300 px-5 py-3 shadow-xs flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs text-slate-600">
+                  <span className="font-semibold text-emerald-700">Percorso selezionato:</span>{" "}
+                  <code className="bg-slate-100 px-2 py-1 rounded text-slate-900">{copiedBoxPath}</code>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCopiedBoxPath("")}
+                  className="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
+                >
+                  Chiudi
+                </button>
+              </div>
+            )}
+
             {!activeItem ? (
               <>
                 <header className="bg-white/95 backdrop-blur rounded-3xl border border-slate-200/80 shadow-sm px-6 py-5 flex flex-wrap items-center justify-between gap-4">
@@ -321,7 +602,7 @@
                         </span>
                       </div>
                       <p className="text-sm text-slate-500 mt-0.5">
-                        Dashboard operativa in stile app per consultare, copiare il percorso o aprire l'anteprima delle schede
+                        Genera il comando rapido (.bat) per aprire il singolo file sul PC, copia il percorso o apri l'anteprima
                       </p>
                     </div>
                   </div>
@@ -374,7 +655,11 @@
                           <span className="text-[11px] font-semibold uppercase tracking-wider bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">
                             {item.category || "Scheda"}
                           </span>
-                          {item.relPath ? (
+                          {item.hasFile ? (
+                            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                              File caricato
+                            </span>
+                          ) : item.relPath ? (
                             <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
                               Link attivo
                             </span>
@@ -396,27 +681,37 @@
                         <div className="grid grid-cols-2 gap-2">
                           <button
                             type="button"
-                            onClick={() => copyPath(item.relPath, item.title)}
+                            onClick={() => downloadBatLauncher(item)}
                             className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-2.5 px-3 rounded-xl transition cursor-pointer"
                           >
-                            Copia percorso
+                            Crea Comando (.bat)
                           </button>
                           <button
                             type="button"
-                            onClick={() => openPreview(item)}
-                            className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs py-2.5 px-3 rounded-xl transition cursor-pointer"
+                            onClick={() => copyPath(item.relPath, item.title)}
+                            className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs py-2.5 px-3 rounded-xl transition cursor-pointer"
                           >
-                            Anteprima
+                            Copia percorso
                           </button>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => fileInputRefs.current[item.id]?.click()}
-                          className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs py-2 px-3 rounded-xl transition cursor-pointer"
-                        >
-                          ↑ Carica .xlsx per anteprima
-                        </button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openPreview(item)}
+                            className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs py-2 px-3 rounded-xl transition cursor-pointer"
+                          >
+                            Anteprima
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => fileInputRefs.current[item.id]?.click()}
+                            className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs py-2 px-3 rounded-xl transition cursor-pointer"
+                          >
+                            ↑ Carica .xlsx
+                          </button>
+                        </div>
+
                         <input
                           ref={(el) => (fileInputRefs.current[item.id] = el)}
                           type="file"
@@ -445,7 +740,7 @@
                     </button>
                     <div>
                       <h2 className="text-xl font-bold text-slate-900">{activeItem.title}</h2>
-                      <p className="text-xs text-slate-500">{activeItem.relPath || "Anteprima rapida"}</p>
+                      <p className="text-xs text-slate-500">{activeItem.relPath || "Anteprima foglio"}</p>
                     </div>
                   </div>
 
@@ -474,6 +769,29 @@
                   </div>
                 </div>
 
+                {sheetNames.length > 1 && (
+                  <div className="flex flex-wrap gap-2">
+                    {sheetNames.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={async () => {
+                          if (activeItem.workbookBase64) {
+                            await loadSheetFromBase64(activeItem.workbookBase64, name);
+                          }
+                        }}
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer ${
+                          name === currentSheet
+                            ? "bg-slate-900 text-white"
+                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        }`}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <div className="overflow-auto max-h-[65vh] border border-slate-200 rounded-2xl bg-slate-50 p-3">
                   <div
                     style={{
@@ -485,27 +803,61 @@
                     <table className="border-collapse bg-white">
                       <tbody>
                         {gridData.map((row, rIdx) => (
-                          <tr key={rIdx}>
-                            {row.map((cell, cIdx) => (
-                              <td
-                                key={cIdx}
-                                className="border border-slate-200 min-w-[160px] h-9 p-0"
-                              >
-                                <textarea
-                                  rows={1}
-                                  value={cell}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setGridData((prev) =>
-                                      prev.map((r, ri) =>
-                                        ri === rIdx ? r.map((c, ci) => (ci === cIdx ? val : c)) : r
-                                      )
-                                    );
+                          <tr key={rIdx} style={{ height: `${rowHeights[rIdx] || 32}px` }}>
+                            {row.map((cell, cIdx) => {
+                              const span = getMergeSpan(rIdx, cIdx);
+                              if (span.hidden) return null;
+                              const visual =
+                                (cellStyles[rIdx] && cellStyles[rIdx][cIdx]) ||
+                                extractExcelJsStyle(null, rIdx === 0);
+                              const totalWidth = Array.from({ length: span.colSpan }, (_, k) =>
+                                colWidths[cIdx + k] || 135
+                              ).reduce((a, b) => a + b, 0);
+
+                              return (
+                                <td
+                                  key={cIdx}
+                                  rowSpan={span.rowSpan}
+                                  colSpan={span.colSpan}
+                                  style={{
+                                    width: `${totalWidth}px`,
+                                    minWidth: `${totalWidth}px`,
+                                    backgroundColor: visual.backgroundColor,
+                                    borderTop: visual.borderTop,
+                                    borderRight: visual.borderRight,
+                                    borderBottom: visual.borderBottom,
+                                    borderLeft: visual.borderLeft,
+                                    verticalAlign: visual.verticalAlign,
+                                    padding: 0
                                   }}
-                                  className="sheet-cell-box w-full h-full px-2.5 py-1.5 text-sm resize-none bg-transparent"
-                                />
-                              </td>
-                            ))}
+                                >
+                                  <textarea
+                                    rows={1}
+                                    value={cell}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setGridData((prev) =>
+                                        prev.map((r, ri) =>
+                                          ri === rIdx ? r.map((c, ci) => (ci === cIdx ? val : c)) : r
+                                        )
+                                      );
+                                    }}
+                                    style={{
+                                      backgroundColor: "transparent",
+                                      color: visual.color,
+                                      fontWeight: visual.fontWeight,
+                                      fontStyle: visual.fontStyle,
+                                      textDecoration: visual.textDecoration,
+                                      textAlign: visual.textAlign,
+                                      fontSize: visual.fontSize,
+                                      whiteSpace: visual.whiteSpace,
+                                      wordBreak: visual.wordBreak
+                                    }}
+                                    className="sheet-cell-box w-full h-full px-2.5 py-1.5 resize-none leading-snug"
+                                  />
+                                </td>
+                              );
+                            })}
                           </tr>
                         ))}
                       </tbody>
