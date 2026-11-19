@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Excel Hub — Dashboard Moderna</title>
+  <title>Excel Hub — Layout Originale</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -13,11 +13,11 @@
     body {
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    .sheet-cell-input:focus {
-      outline: 2px solid #10b981;
+    .cell-editor:focus {
+      outline: 2px solid #059669;
       outline-offset: -2px;
-      z-index: 2;
       position: relative;
+      z-index: 3;
     }
   </style>
 </head>
@@ -27,20 +27,78 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    const STORAGE_KEY = "excel_hub_modern_layout_v1";
+    const STORAGE_KEY = "excel_hub_exceljs_v1";
 
-    function normalizeHexColor(colorObj) {
-      if (!colorObj) return null;
-      if (colorObj.rgb) {
-        const clean = String(colorObj.rgb).replace(/^#/, "");
-        if (clean.length === 8) return `#${clean.slice(2)}`;
-        if (clean.length === 6) return `#${clean}`;
+    function argbToCss(colorObj, fallback = null) {
+      if (!colorObj) return fallback;
+      if (colorObj.argb) {
+        const hex = String(colorObj.argb).replace(/^#/, "");
+        if (hex.length === 8) {
+          const alphaHex = hex.slice(0, 2);
+          const rgb = hex.slice(2);
+          if (alphaHex === "00") return fallback;
+          return `#${rgb}`;
+        }
+        if (hex.length === 6) return `#${hex}`;
       }
-      return null;
+      return fallback;
     }
 
-    function extractCellVisualStyle(cell, isHeaderRow) {
-      const style = {
+    function borderSideToCss(side) {
+      if (!side || !side.style) return "1px solid #e2e8f0";
+      const color = argbToCss(side.color, "#64748b");
+      let width = "1px";
+      let lineStyle = "solid";
+
+      switch (side.style) {
+        case "thin":
+          width = "1px";
+          lineStyle = "solid";
+          break;
+        case "medium":
+          width = "2px";
+          lineStyle = "solid";
+          break;
+        case "thick":
+          width = "3px";
+          lineStyle = "solid";
+          break;
+        case "double":
+          width = "3px";
+          lineStyle = "double";
+          break;
+        case "dotted":
+          width = "1px";
+          lineStyle = "dotted";
+          break;
+        case "dashed":
+        case "hair":
+          width = "1px";
+          lineStyle = side.style === "dashed" ? "dashed" : "solid";
+          break;
+        default:
+          width = "1px";
+          lineStyle = "solid";
+      }
+      return `${width} ${lineStyle} ${color}`;
+    }
+
+    function cellToDisplayValue(cell) {
+      if (!cell || cell.value === null || cell.value === undefined) return "";
+      const v = cell.value;
+      if (typeof v === "object") {
+        if (v.text !== undefined) return String(v.text);
+        if (Array.isArray(v.richText)) {
+          return v.richText.map((part) => part.text || "").join("");
+        }
+        if (v.result !== undefined && v.result !== null) return String(v.result);
+        if (v.formula) return v.result !== undefined ? String(v.result) : `=${v.formula}`;
+      }
+      return String(v);
+    }
+
+    function extractExcelJsStyle(cell, isHeaderRow) {
+      const base = {
         backgroundColor: isHeaderRow ? "#f8fafc" : "#ffffff",
         color: "#0f172a",
         fontWeight: isHeaderRow ? "600" : "400",
@@ -49,181 +107,171 @@
         textAlign: "left",
         verticalAlign: "middle",
         fontSize: "13px",
+        whiteSpace: "nowrap",
         borderTop: "1px solid #e2e8f0",
         borderRight: "1px solid #e2e8f0",
         borderBottom: "1px solid #e2e8f0",
         borderLeft: "1px solid #e2e8f0"
       };
 
-      if (!cell || !cell.s) {
-        if (typeof cell?.v === "number") {
-          style.textAlign = "right";
-        }
-        return style;
+      if (!cell) return base;
+
+      if (typeof cell.value === "number") {
+        base.textAlign = "right";
       }
 
-      const s = cell.s;
-      const fillBg = normalizeHexColor(s.fgColor) || normalizeHexColor(s.fill?.fgColor);
-      if (fillBg && fillBg.toLowerCase() !== "#ffffff" && fillBg.toLowerCase() !== "#000000") {
-        style.backgroundColor = fillBg;
-      } else if (fillBg && fillBg.toLowerCase() === "#ffffff") {
-        style.backgroundColor = "#ffffff";
-      }
-
-      const fontColor = normalizeHexColor(s.color) || normalizeHexColor(s.font?.color);
-      if (fontColor) {
-        style.color = fontColor;
-      }
-
-      const font = s.font || {};
-      if (font.bold || s.bold) style.fontWeight = "700";
-      if (font.italic || s.italic) style.fontStyle = "italic";
-      if (font.underline || s.underline) style.textDecoration = "underline";
-      if (font.sz) {
-        const pt = Number(font.sz);
-        if (!Number.isNaN(pt) && pt > 0) {
-          style.fontSize = `${Math.min(24, Math.max(11, Math.round(pt * 1.25)))}px`;
+      const fill = cell.fill;
+      if (fill && fill.type === "pattern" && fill.pattern && fill.pattern !== "none") {
+        const fg = argbToCss(fill.fgColor, null);
+        if (fg) {
+          base.backgroundColor = fg;
         }
       }
 
-      const align = s.alignment || {};
+      const font = cell.font || {};
+      const fontColor = argbToCss(font.color, null);
+      if (fontColor) base.color = fontColor;
+      if (font.bold) base.fontWeight = "700";
+      if (font.italic) base.fontStyle = "italic";
+      if (font.underline) base.textDecoration = "underline";
+      if (font.size) {
+        const px = Math.round(Number(font.size) * 1.33);
+        if (!Number.isNaN(px) && px > 0) {
+          base.fontSize = `${Math.min(26, Math.max(11, px))}px`;
+        }
+      }
+
+      const align = cell.alignment || {};
       if (align.horizontal) {
-        style.textAlign = align.horizontal;
-      } else if (typeof cell.v === "number") {
-        style.textAlign = "right";
+        if (align.horizontal === "center" || align.horizontal === "right" || align.horizontal === "left") {
+          base.textAlign = align.horizontal;
+        }
       }
       if (align.vertical) {
-        style.verticalAlign = align.vertical === "center" ? "middle" : align.vertical;
+        if (align.vertical === "middle") base.verticalAlign = "middle";
+        else if (align.vertical === "top") base.verticalAlign = "top";
+        else if (align.vertical === "bottom") base.verticalAlign = "bottom";
+      }
+      if (align.wrapText) {
+        base.whiteSpace = "normal";
+        base.wordBreak = "break-word";
       }
 
-      return style;
+      const b = cell.border || {};
+      if (b.top && b.top.style) base.borderTop = borderSideToCss(b.top);
+      if (b.right && b.right.style) base.borderRight = borderSideToCss(b.right);
+      if (b.bottom && b.bottom.style) base.borderBottom = borderSideToCss(b.bottom);
+      if (b.left && b.left.style) base.borderLeft = borderSideToCss(b.left);
+
+      return base;
     }
 
-    function createSampleWorkbookBase64() {
-      const wb = XLSX.utils.book_new();
-      const rows = [
-        ["Report Giornaliero Capi Servizio", "", "", ""],
-        ["Articolo", "Quantità", "Prezzo Unitario", "Stato"],
+    function parseMergeRange(rangeStr) {
+      // Es. "A1:D1"
+      const parts = rangeStr.split(":");
+      if (parts.length !== 2) return null;
+      const parseCoord = (ref) => {
+        const match = ref.match(/^([A-Z]+)(\d+)$/i);
+        if (!match) return null;
+        const colLetters = match[1].toUpperCase();
+        const rowNum = parseInt(match[2], 10) - 1;
+        let colNum = 0;
+        for (let i = 0; i < colLetters.length; i++) {
+          colNum = colNum * 26 + (colLetters.charCodeAt(i) - 64);
+        }
+        return { r: rowNum, c: colNum - 1 };
+      };
+      const s = parseCoord(parts[0]);
+      const e = parseCoord(parts[1]);
+      if (!s || !e) return null;
+      return { s, e };
+    }
+
+    async function buildSampleBase64() {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Foglio1");
+
+      ws.mergeCells("A1:D1");
+      ws.getCell("A1").value = "Report Giornaliero Capi Servizio";
+      ws.getCell("A1").font = { bold: true, size: 14, color: { argb: "FFFFFFFF" } };
+      ws.getCell("A1").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
+      ws.getCell("A1").alignment = { horizontal: "left", vertical: "middle" };
+      ws.getRow(1).height = 30;
+
+      const headers = ["Articolo", "Quantità", "Prezzo Unitario", "Stato"];
+      ws.getRow(2).values = headers;
+      ws.getRow(2).height = 24;
+      headers.forEach((_, idx) => {
+        const cell = ws.getRow(2).getCell(idx + 1);
+        cell.font = { bold: true, size: 11, color: { argb: "FF065F46" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } };
+        cell.alignment = { horizontal: idx === 1 || idx === 2 ? "right" : "left", vertical: "middle" };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FF6EE7B7" } },
+          bottom: { style: "medium", color: { argb: "FF059669" } },
+          left: { style: "thin", color: { argb: "FF6EE7B7" } },
+          right: { style: "thin", color: { argb: "FF6EE7B7" } }
+        };
+      });
+
+      const sampleRows = [
         ["Capi Servizio A", 12, 18.5, "Pronto"],
         ["Capi Servizio B", 8, 24.0, "In lavorazione"],
         ["Capi Servizio C", 15, 14.2, "Consegnato"]
       ];
-      const ws = XLSX.utils.aoa_to_sheet(rows);
-      ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }];
-      ws["!cols"] = [{ wch: 28 }, { wch: 14 }, { wch: 18 }, { wch: 20 }];
-      ws["!rows"] = [{ hpt: 30 }, { hpt: 24 }, { hpt: 22 }, { hpt: 22 }, { hpt: 22 }];
-
-      if (ws["A1"]) {
-        ws["A1"].s = {
-          font: { bold: true, sz: 14, color: { rgb: "FFFFFF" } },
-          fill: { fgColor: { rgb: "0F172A" } },
-          alignment: { horizontal: "left", vertical: "center" }
-        };
-      }
-      ["A2", "B2", "C2", "D2"].forEach((ref) => {
-        if (ws[ref]) {
-          ws[ref].s = {
-            font: { bold: true, sz: 11, color: { rgb: "065F46" } },
-            fill: { fgColor: { rgb: "D1FAE5" } },
-            alignment: { horizontal: ref === "B2" || ref === "C2" ? "right" : "left", vertical: "center" }
-          };
-        }
+      sampleRows.forEach((r, i) => {
+        const row = ws.getRow(3 + i);
+        row.values = r;
+        row.height = 22;
       });
 
-      XLSX.utils.book_append_sheet(wb, ws, "Foglio1");
-      return XLSX.write(wb, { type: "base64", bookType: "xlsx" });
-    }
-
-    function createEmptyWorkbookBase64() {
-      const wb = XLSX.utils.book_new();
-      const rows = Array.from({ length: 12 }, (_, r) =>
-        Array.from({ length: 6 }, (_, c) => (r === 0 ? `Colonna ${c + 1}` : ""))
-      );
-      const ws = XLSX.utils.aoa_to_sheet(rows);
-      ws["!cols"] = Array.from({ length: 6 }, () => ({ wch: 18 }));
-      ws["!rows"] = Array.from({ length: 12 }, () => ({ hpt: 24 }));
-      XLSX.utils.book_append_sheet(wb, ws, "Foglio1");
-      return XLSX.write(wb, { type: "base64", bookType: "xlsx" });
-    }
-
-    function getDefaultTiles() {
-      const sampleB64 = createSampleWorkbookBase64();
-      return [
-        {
-          id: "tile-1",
-          title: "File Esempio",
-          fileName: "Esempio_Layout.xlsx",
-          folderName: "Excel_Aggiornati",
-          updatedAt: "19/11",
-          sheetCount: 1,
-          hasFile: true,
-          workbookBase64: sampleB64
-        },
-        {
-          id: "tile-2",
-          title: "File 2",
-          fileName: "File_2.xlsx",
-          folderName: "Excel_Aggiornati",
-          updatedAt: "",
-          sheetCount: 0,
-          hasFile: false,
-          workbookBase64: null
-        },
-        {
-          id: "tile-3",
-          title: "File 3",
-          fileName: "File_3.xlsx",
-          folderName: "Excel_Aggiornati",
-          updatedAt: "",
-          sheetCount: 0,
-          hasFile: false,
-          workbookBase64: null
-        },
-        {
-          id: "tile-4",
-          title: "File 4",
-          fileName: "File_4.xlsx",
-          folderName: "Excel_Aggiornati",
-          updatedAt: "",
-          sheetCount: 0,
-          hasFile: false,
-          workbookBase64: null
-        },
-        {
-          id: "tile-5",
-          title: "File 5",
-          fileName: "File_5.xlsx",
-          folderName: "Excel_Aggiornati",
-          updatedAt: "",
-          sheetCount: 0,
-          hasFile: false,
-          workbookBase64: null
-        },
-        {
-          id: "tile-6",
-          title: "File 6",
-          fileName: "File_6.xlsx",
-          folderName: "Excel_Aggiornati",
-          updatedAt: "",
-          sheetCount: 0,
-          hasFile: false,
-          workbookBase64: null
-        }
+      ws.columns = [
+        { width: 28 },
+        { width: 15 },
+        { width: 18 },
+        { width: 22 }
       ];
+
+      const buf = await wb.xlsx.writeBuffer();
+      const bytes = new Uint8Array(buf);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
+    }
+
+    async function buildEmptyBase64() {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Foglio1");
+      ws.getRow(1).values = ["Colonna 1", "Colonna 2", "Colonna 3", "Colonna 4", "Colonna 5", "Colonna 6"];
+      for (let r = 1; r <= 12; r++) {
+        ws.getRow(r).height = 24;
+      }
+      ws.columns = Array.from({ length: 6 }, () => ({ width: 18 }));
+      const buf = await wb.xlsx.writeBuffer();
+      const bytes = new Uint8Array(buf);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
+    }
+
+    function base64ToUint8Array(b64) {
+      const binaryString = atob(b64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    function uint8ArrayToBase64(bytes) {
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
     }
 
     function App() {
-      const [tiles, setTiles] = useState(() => {
-        try {
-          const saved = localStorage.getItem(STORAGE_KEY);
-          if (saved) {
-            const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-          }
-        } catch (e) {}
-        return getDefaultTiles();
-      });
-
+      const [tiles, setTiles] = useState([]);
+      const [initialized, setInitialized] = useState(false);
       const [activeTileId, setActiveTileId] = useState(null);
       const [sheetNames, setSheetNames] = useState([]);
       const [currentSheet, setCurrentSheet] = useState("");
@@ -241,10 +289,93 @@
       const activeTile = tiles.find((t) => t.id === activeTileId) || null;
 
       useEffect(() => {
+        (async () => {
+          try {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setTiles(parsed);
+                setInitialized(true);
+                return;
+              }
+            }
+          } catch (e) {}
+
+          const sampleB64 = await buildSampleBase64();
+          const defaults = [
+            {
+              id: "tile-1",
+              title: "File Esempio",
+              fileName: "Esempio_Layout.xlsx",
+              folderName: "Excel_Aggiornati",
+              updatedAt: "19/11",
+              sheetCount: 1,
+              hasFile: true,
+              workbookBase64: sampleB64
+            },
+            {
+              id: "tile-2",
+              title: "File 2",
+              fileName: "File_2.xlsx",
+              folderName: "Excel_Aggiornati",
+              updatedAt: "",
+              sheetCount: 0,
+              hasFile: false,
+              workbookBase64: null
+            },
+            {
+              id: "tile-3",
+              title: "File 3",
+              fileName: "File_3.xlsx",
+              folderName: "Excel_Aggiornati",
+              updatedAt: "",
+              sheetCount: 0,
+              hasFile: false,
+              workbookBase64: null
+            },
+            {
+              id: "tile-4",
+              title: "File 4",
+              fileName: "File_4.xlsx",
+              folderName: "Excel_Aggiornati",
+              updatedAt: "",
+              sheetCount: 0,
+              hasFile: false,
+              workbookBase64: null
+            },
+            {
+              id: "tile-5",
+              title: "File 5",
+              fileName: "File_5.xlsx",
+              folderName: "Excel_Aggiornati",
+              updatedAt: "",
+              sheetCount: 0,
+              hasFile: false,
+              workbookBase64: null
+            },
+            {
+              id: "tile-6",
+              title: "File 6",
+              fileName: "File_6.xlsx",
+              folderName: "Excel_Aggiornati",
+              updatedAt: "",
+              sheetCount: 0,
+              hasFile: false,
+              workbookBase64: null
+            }
+          ];
+          setTiles(defaults);
+          setInitialized(true);
+        })();
+      }, []);
+
+      useEffect(() => {
+        if (!initialized) return;
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles));
         } catch (e) {}
-      }, [tiles]);
+      }, [tiles, initialized]);
 
       const notify = (msg) => {
         setStatusMsg(msg);
@@ -255,17 +386,19 @@
 
       const addTile = () => {
         const nextNum = tiles.length + 1;
-        const newTile = {
-          id: `tile-${Date.now()}`,
-          title: `File ${nextNum}`,
-          fileName: `File_${nextNum}.xlsx`,
-          folderName: "Excel_Aggiornati",
-          updatedAt: "",
-          sheetCount: 0,
-          hasFile: false,
-          workbookBase64: null
-        };
-        setTiles((prev) => [...prev, newTile]);
+        setTiles((prev) => [
+          ...prev,
+          {
+            id: `tile-${Date.now()}`,
+            title: `File ${nextNum}`,
+            fileName: `File_${nextNum}.xlsx`,
+            folderName: "Excel_Aggiornati",
+            updatedAt: "",
+            sheetCount: 0,
+            hasFile: false,
+            workbookBase64: null
+          }
+        ]);
         notify("Nuovo riquadro aggiunto.");
       };
 
@@ -291,98 +424,103 @@
       const handleFileUpload = (id, file) => {
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = (e) => {
-          const data = new Uint8Array(e.target.result);
-          const wb = XLSX.read(data, { type: "array", cellStyles: true });
-          const b64 = XLSX.write(wb, { type: "base64", bookType: "xlsx" });
-          const now = new Date();
-          const dateLabel = `${String(now.getDate()).padStart(2, "0")}/${String(
-            now.getMonth() + 1
-          ).padStart(2, "0")}`;
+        reader.onload = async (e) => {
+          try {
+            const bytes = new Uint8Array(e.target.result);
+            const wb = new ExcelJS.Workbook();
+            await wb.xlsx.load(bytes.buffer);
+            const b64 = uint8ArrayToBase64(bytes);
+            const now = new Date();
+            const dateLabel = `${String(now.getDate()).padStart(2, "0")}/${String(
+              now.getMonth() + 1
+            ).padStart(2, "0")}`;
 
-          setTiles((prev) =>
-            prev.map((t) =>
-              t.id === id
-                ? {
-                    ...t,
-                    title: t.title.startsWith("File ")
-                      ? file.name.replace(/\.[^/.]+$/, "")
-                      : t.title,
-                    fileName: file.name.endsWith(".xlsx")
-                      ? file.name
-                      : `${file.name.replace(/\.[^/.]+$/, "")}.xlsx`,
-                    updatedAt: dateLabel,
-                    sheetCount: wb.SheetNames ? wb.SheetNames.length : 1,
-                    hasFile: true,
-                    workbookBase64: b64
-                  }
-                : t
-            )
-          );
-          notify(`Caricato "${file.name}" con layout preservato.`);
+            setTiles((prev) =>
+              prev.map((t) =>
+                t.id === id
+                  ? {
+                      ...t,
+                      title: t.title.startsWith("File ")
+                        ? file.name.replace(/\.[^/.]+$/, "")
+                        : t.title,
+                      fileName: file.name.endsWith(".xlsx")
+                        ? file.name
+                        : `${file.name.replace(/\.[^/.]+$/, "")}.xlsx`,
+                      updatedAt: dateLabel,
+                      sheetCount: wb.worksheets.length || 1,
+                      hasFile: true,
+                      workbookBase64: b64
+                    }
+                  : t
+              )
+            );
+            notify(`Caricato "${file.name}".`);
+          } catch (err) {
+            notify("Impossibile leggere il file: assicurati che sia un file .xlsx valido.");
+          }
         };
         reader.readAsArrayBuffer(file);
       };
 
-      const loadSheetFromBase64 = (b64, targetSheet = null) => {
-        const wb = XLSX.read(b64, { type: "base64", cellStyles: true });
-        const names = wb.SheetNames || ["Foglio1"];
-        const chosen = targetSheet && names.includes(targetSheet) ? targetSheet : names[0];
-        const ws = wb.Sheets[chosen];
-        const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-        const maxCols = Math.max(
-          6,
-          ...rawRows.map((r) => (Array.isArray(r) ? r.length : 0))
-        );
-        const totalRows = Math.max(12, rawRows.length);
+      const loadSheetFromBase64 = async (b64, targetSheet = null) => {
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(base64ToUint8Array(b64).buffer);
+        const names = wb.worksheets.map((ws) => ws.name);
+        const chosen = targetSheet && names.includes(targetSheet) ? targetSheet : names[0] || "Foglio1";
+        const ws = wb.getWorksheet(chosen) || wb.worksheets[0];
+
+        const maxRows = Math.max(12, ws.rowCount || 12);
+        const maxCols = Math.max(6, ws.columnCount || 6);
 
         const normalized = [];
         const stylesMatrix = [];
+        const rowsInfo = [];
 
-        for (let r = 0; r < totalRows; r++) {
-          const rowValues = [];
-          const rowStyles = [];
-          for (let c = 0; c < maxCols; c++) {
-            const addr = XLSX.utils.encode_cell({ r, c });
-            const cellObj = ws[addr];
-            const val =
-              rawRows[r] && rawRows[r][c] !== undefined
-                ? String(rawRows[r][c])
-                : cellObj && cellObj.v !== undefined
-                ? String(cellObj.v)
-                : "";
-            rowValues.push(val);
-            rowStyles.push(extractCellVisualStyle(cellObj, r === 0));
+        for (let r = 1; r <= maxRows; r++) {
+          const row = ws.getRow(r);
+          const rowVals = [];
+          const rowSts = [];
+          const hPt = row.height;
+          rowsInfo.push(Math.max(30, Math.min(110, (hPt || 22) * 1.35)));
+
+          for (let c = 1; c <= maxCols; c++) {
+            const cell = row.getCell(c);
+            rowVals.push(cellToDisplayValue(cell));
+            rowSts.push(extractExcelJsStyle(cell, r === 1));
           }
-          normalized.push(rowValues);
-          stylesMatrix.push(rowStyles);
+          normalized.push(rowVals);
+          stylesMatrix.push(rowSts);
         }
 
-        const colsInfo = Array.from({ length: maxCols }, (_, c) => {
-          const w = ws["!cols"] && ws["!cols"][c] && ws["!cols"][c].wch;
-          return Math.max(115, Math.min(340, (w || 16) * 9));
+        const colsInfo = Array.from({ length: maxCols }, (_, idx) => {
+          const col = ws.getColumn(idx + 1);
+          const w = col && col.width;
+          return Math.max(110, Math.min(360, (w || 16) * 9.2));
         });
 
-        const rowsInfo = Array.from({ length: totalRows }, (_, r) => {
-          const h = ws["!rows"] && ws["!rows"][r] && ws["!rows"][r].hpt;
-          return Math.max(32, Math.min(90, (h || 22) * 1.4));
-        });
+        const parsedMerges = [];
+        if (ws._merges) {
+          Object.keys(ws._merges).forEach((rangeStr) => {
+            const parsed = parseMergeRange(rangeStr);
+            if (parsed) parsedMerges.push(parsed);
+          });
+        }
 
-        setSheetNames(names);
+        setSheetNames(names.length ? names : ["Foglio1"]);
         setCurrentSheet(chosen);
         setGridData(normalized);
         setCellStyles(stylesMatrix);
-        setMerges(ws["!merges"] || []);
+        setMerges(parsedMerges);
         setColWidths(colsInfo);
         setRowHeights(rowsInfo);
       };
 
-      const openTileEditor = (tile) => {
-        const b64 = tile.workbookBase64 || createEmptyWorkbookBase64();
+      const openTileEditor = async (tile) => {
+        const b64 = tile.workbookBase64 || (await buildEmptyBase64());
         setActiveTileId(tile.id);
         setEditFileName(tile.fileName || "Foglio_Aggiornato.xlsx");
         setEditFolderName(tile.folderName || "Excel_Aggiornati");
-        loadSheetFromBase64(b64);
+        await loadSheetFromBase64(b64);
       };
 
       const getMergeSpan = (rIdx, cIdx) => {
@@ -403,37 +541,45 @@
         return { rowSpan: 1, colSpan: 1, hidden: false };
       };
 
-      const buildUpdatedWorkbookBase64 = () => {
+      const buildUpdatedWorkbookBase64 = async () => {
         const baseB64 =
           activeTile && activeTile.workbookBase64
             ? activeTile.workbookBase64
-            : createEmptyWorkbookBase64();
-        const wb = XLSX.read(baseB64, { type: "base64", cellStyles: true });
-        const sheetKey = currentSheet || wb.SheetNames[0] || "Foglio1";
-        const prevWs = wb.Sheets[sheetKey] || {};
-        const ws = XLSX.utils.aoa_to_sheet(gridData);
+            : await buildEmptyBase64();
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(base64ToUint8Array(baseB64).buffer);
+        const ws = wb.getWorksheet(currentSheet) || wb.worksheets[0];
 
         for (let r = 0; r < gridData.length; r++) {
+          const row = ws.getRow(r + 1);
+          if (rowHeights[r]) {
+            row.height = Math.max(20, Math.round(rowHeights[r] / 1.35));
+          }
           for (let c = 0; c < (gridData[r] || []).length; c++) {
-            const addr = XLSX.utils.encode_cell({ r, c });
-            if (ws[addr] && prevWs[addr] && prevWs[addr].s) {
-              ws[addr].s = prevWs[addr].s;
-            }
+            const span = getMergeSpan(r, c);
+            if (span.hidden) continue;
+            const cell = row.getCell(c + 1);
+            const rawVal = gridData[r][c];
+            const numVal =
+              rawVal !== "" && !Number.isNaN(Number(rawVal)) && String(rawVal).trim() !== ""
+                ? Number(rawVal)
+                : rawVal;
+            cell.value = numVal;
           }
         }
 
-        if (merges && merges.length > 0) {
-          ws["!merges"] = merges;
+        for (let c = 0; c < colWidths.length; c++) {
+          const col = ws.getColumn(c + 1);
+          col.width = Math.max(10, Math.round(colWidths[c] / 9.2));
         }
-        ws["!cols"] = colWidths.map((px) => ({ wch: Math.max(10, Math.round(px / 9)) }));
-        ws["!rows"] = rowHeights.map((px) => ({ hpt: Math.max(20, Math.round(px / 1.4)) }));
-        wb.Sheets[sheetKey] = ws;
-        return XLSX.write(wb, { type: "base64", bookType: "xlsx" });
+
+        const buf = await wb.xlsx.writeBuffer();
+        return uint8ArrayToBase64(new Uint8Array(buf));
       };
 
-      const persistChangesInTile = () => {
-        if (!activeTile) return;
-        const updatedB64 = buildUpdatedWorkbookBase64();
+      const persistChangesInTile = async () => {
+        if (!activeTile) return null;
+        const updatedB64 = await buildUpdatedWorkbookBase64();
         const cleanFile = (editFileName.trim() || "Foglio_Aggiornato.xlsx").endsWith(".xlsx")
           ? editFileName.trim()
           : `${(editFileName.trim() || "Foglio_Aggiornato")}.xlsx`;
@@ -473,7 +619,7 @@
         setGridData((prev) => [...prev, Array.from({ length: cols }, () => "")]);
         setCellStyles((prev) => [
           ...prev,
-          Array.from({ length: cols }, () => extractCellVisualStyle(null, false))
+          Array.from({ length: cols }, () => extractExcelJsStyle(null, false))
         ]);
         setRowHeights((prev) => [...prev, 32]);
       };
@@ -481,7 +627,7 @@
       const addCol = () => {
         setGridData((prev) => prev.map((row) => [...row, ""]));
         setCellStyles((prev) =>
-          prev.map((row, rIdx) => [...row, extractCellVisualStyle(null, rIdx === 0)])
+          prev.map((row, rIdx) => [...row, extractExcelJsStyle(null, rIdx === 0)])
         );
         setColWidths((prev) => [...prev, 130]);
       };
@@ -503,14 +649,10 @@
       };
 
       const saveToFolderOrDownload = async () => {
-        const saved = persistChangesInTile();
+        const saved = await persistChangesInTile();
         if (!saved) return;
         const { updatedB64, cleanFile } = saved;
-        const binaryString = atob(updatedB64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
+        const bytes = base64ToUint8Array(updatedB64);
         const blob = new Blob([bytes], {
           type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         });
@@ -544,8 +686,8 @@
         notify(`Scaricato "${cleanFile}".`);
       };
 
-      const shareByEmail = () => {
-        const saved = persistChangesInTile();
+      const shareByEmail = async () => {
+        const saved = await persistChangesInTile();
         const fileLabel = saved ? saved.cleanFile : editFileName || "Foglio.xlsx";
         const subject = encodeURIComponent(`Aggiornamento file Excel: ${fileLabel}`);
         const body = encodeURIComponent(
@@ -560,7 +702,7 @@
         <div className="min-h-screen w-full px-4 sm:px-6 lg:px-8 py-6">
           <div className="w-full max-w-[1640px] mx-auto space-y-6">
             {statusMsg && (
-              <div className="rounded-2xl bg-slate-900/95 backdrop-blur text-white px-5 py-3 text-sm font-medium shadow-lg flex items-center justify-between">
+              <div className="rounded-2xl bg-slate-900/95 text-white px-5 py-3 text-sm font-medium shadow-lg flex items-center justify-between">
                 <span>{statusMsg}</span>
                 <span className="text-xs text-emerald-300 font-semibold">OK</span>
               </div>
@@ -579,11 +721,11 @@
                           Excel Hub
                         </h1>
                         <span className="text-[11px] font-semibold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-                          Layout Fedele
+                          ExcelJS Layout
                         </span>
                       </div>
                       <p className="text-sm text-slate-500 mt-0.5">
-                        Gestione orizzontale dei fogli con preservazione di celle unite, colori e allineamenti
+                        Bordi, colori, allineamenti e celle unite letti direttamente dal file .xlsx
                       </p>
                     </div>
                   </div>
@@ -635,7 +777,7 @@
                         <input
                           ref={(el) => (fileInputRefs.current[tile.id] = el)}
                           type="file"
-                          accept=".xlsx,.xls,.csv"
+                          accept=".xlsx"
                           className="hidden"
                           onChange={(e) => {
                             handleFileUpload(tile.id, e.target.files?.[0]);
@@ -660,7 +802,7 @@
                               {tile.sheetCount > 1 ? ` • ${tile.sheetCount} fogli` : ""}
                             </span>
                           ) : (
-                            <span>Rinomina il riquadro o carica un foglio Excel</span>
+                            <span>Rinomina il riquadro o carica un file .xlsx</span>
                           )}
                         </div>
                       </div>
@@ -668,7 +810,7 @@
                       <button
                         type="button"
                         onClick={() => openTileEditor(tile)}
-                        className="w-full bg-slate-900 group-hover:bg-slate-800 text-white font-semibold text-sm py-3 rounded-2xl transition cursor-pointer shadow-xs"
+                        className="w-full bg-slate-900 group-hover:bg-slate-800 text-white font-semibold text-sm py-3 rounded-2xl transition cursor-pointer"
                       >
                         Apri Foglio
                       </button>
@@ -687,8 +829,8 @@
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      onClick={() => {
-                        persistChangesInTile();
+                      onClick={async () => {
+                        await persistChangesInTile();
                         setActiveTileId(null);
                       }}
                       className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-sm px-4 py-2 rounded-xl transition cursor-pointer"
@@ -698,7 +840,7 @@
                     <div>
                       <h2 className="text-xl font-bold text-slate-900">{activeTile.title}</h2>
                       <p className="text-xs text-slate-500">
-                        Struttura, unione celle e stili del file originale conservati
+                        Bordi, colori e celle unite preservati dal file originale
                       </p>
                     </div>
                   </div>
@@ -777,9 +919,9 @@
                       <button
                         key={name}
                         type="button"
-                        onClick={() => {
-                          persistChangesInTile();
-                          loadSheetFromBase64(buildUpdatedWorkbookBase64(), name);
+                        onClick={async () => {
+                          await persistChangesInTile();
+                          await loadSheetFromBase64(await buildUpdatedWorkbookBase64(), name);
                         }}
                         className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
                           name === currentSheet
@@ -807,7 +949,7 @@
 
                             const visual =
                               (cellStyles[rIdx] && cellStyles[rIdx][cIdx]) ||
-                              extractCellVisualStyle(null, rIdx === 0);
+                              extractExcelJsStyle(null, rIdx === 0);
 
                             const totalWidth = Array.from({ length: span.colSpan }, (_, k) =>
                               colWidths[cIdx + k] || 130
@@ -822,7 +964,11 @@
                                   width: `${totalWidth}px`,
                                   minWidth: `${totalWidth}px`,
                                   backgroundColor: visual.backgroundColor,
-                                  border: "1px solid #cbd5e1",
+                                  borderTop: visual.borderTop,
+                                  borderRight: visual.borderRight,
+                                  borderBottom: visual.borderBottom,
+                                  borderLeft: visual.borderLeft,
+                                  verticalAlign: visual.verticalAlign,
                                   padding: 0
                                 }}
                               >
@@ -839,7 +985,7 @@
                                     textAlign: visual.textAlign,
                                     fontSize: visual.fontSize
                                   }}
-                                  className="sheet-cell-input w-full h-full px-2.5 py-1.5"
+                                  className="cell-editor w-full h-full px-2.5 py-1.5"
                                 />
                               </td>
                             );
