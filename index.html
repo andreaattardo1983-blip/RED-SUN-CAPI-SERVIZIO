@@ -3,26 +3,41 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Excel Hub — Carica, Scarica e Stampa</title>
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Hotel Capi Servizio Hub</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
     body {
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     @media print {
-      .no-print {
-        display: none !important;
+      body * {
+        visibility: hidden !important;
       }
-      .print-area {
-        overflow: visible !important;
-        max-height: none !important;
-        border: none !important;
-        padding: 0 !important;
+      #pdf-report-printable,
+      #pdf-report-printable * {
+        visibility: visible !important;
+      }
+      #pdf-report-printable {
+        position: fixed !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100% !important;
         background: #ffffff !important;
+        padding: 16px !important;
+        z-index: 99999 !important;
+      }
+      .no-print-report {
+        display: none !important;
       }
     }
   </style>
@@ -31,434 +46,3110 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
+    const { useState, useEffect, useMemo } = React;
 
-    const STORAGE_KEY = "excel_hub_carica_scarica_stampa_v1";
+    const STORAGE_KEY = "hotel_capi_servizio_hub_preview_v1";
 
-    const INITIAL_TILES = [
-      { id: "t-1", title: "Giornaliera", fileName: "Giornaliera.xlsx", hasFile: false, workbookBase64: null },
-      { id: "t-2", title: "Budget", fileName: "Budget.xlsx", hasFile: false, workbookBase64: null },
-      { id: "t-3", title: "Avanzamento lavori giornaliero", fileName: "Avanzamento_Lavori.xlsx", hasFile: false, workbookBase64: null },
-      { id: "t-4", title: "Contratti + Richiesta d'Assunzione", fileName: "Contratti_Assunzione.xlsx", hasFile: false, workbookBase64: null },
-      { id: "t-5", title: "Giornaliera Arminzos", fileName: "Giornaliera_Arminzos.xlsx", hasFile: false, workbookBase64: null },
-      { id: "t-6", title: "Fatture/ddt", fileName: "Fatture_DDT.xlsx", hasFile: false, workbookBase64: null }
+    const ATTENDANCE_STATUSES = [
+      "Presente",
+      "Riposo",
+      "Assente ingiustificato",
+      "Malattia",
+      "Ferie",
+      "Infortunio"
     ];
 
-    function uint8ArrayToBase64(bytes) {
-      let bin = "";
-      for (let i = 0; i < bytes.length; i++) {
-        bin += String.fromCharCode(bytes[i]);
+    const ABSENCE_STATUSES = new Set([
+      "Riposo",
+      "Assente ingiustificato",
+      "Malattia",
+      "Ferie",
+      "Infortunio"
+    ]);
+
+    const IMPORTANCE_LEVELS = ["Bassa", "Media", "Alta", "Urgente"];
+
+    const DEPARTMENTS = [
+      "Ricevimento",
+      "Lavanderia",
+      "Sala",
+      "Cucina",
+      "Plonge",
+      "Manutenzione"
+    ];
+
+    const SERVICE_SQUARES = [
+      {
+        id: "direttore",
+        title: "Direttore",
+        subtitle: "Tutte le schermate, note con importanza, presenze mensili & PDF",
+        badge: "Direzione",
+        accent: "from-slate-900 to-slate-800",
+        icon: "👔"
+      },
+      {
+        id: "vice_direttore",
+        title: "Vice Direttore",
+        subtitle: "Tutte le schermate, note con importanza, presenze mensili & PDF",
+        badge: "Vice Direzione",
+        accent: "from-indigo-900 to-slate-800",
+        icon: "🧭"
+      },
+      {
+        id: "capo_ricevimento",
+        title: "Capo Ricevimento",
+        subtitle: "Colazione/Pranzo/Cena, manutenzioni, lamentele & presenze",
+        badge: "Ricevimento",
+        accent: "from-sky-900 to-slate-800",
+        icon: "🛎️"
+      },
+      {
+        id: "lavanderia",
+        title: "Lavanderia",
+        subtitle: "Presenze, interventi & avviso camere pronte a Reception/Dir.",
+        badge: "Lavanderia",
+        accent: "from-teal-900 to-slate-800",
+        icon: "🧺"
+      },
+      {
+        id: "sala",
+        title: "Sala",
+        subtitle: "Coperti Reception + presenze giornaliere Sala & comunicazioni",
+        badge: "Sala",
+        accent: "from-emerald-900 to-slate-800",
+        icon: "🍽️"
+      },
+      {
+        id: "cucina",
+        title: "Cucina",
+        subtitle: "Coperti Reception + presenze Cucina e Plonge & comunicazioni",
+        badge: "Cucina & Plonge",
+        accent: "from-amber-900 to-slate-800",
+        icon: "👨‍🍳"
+      },
+      {
+        id: "manutenzione",
+        title: "Manutenzione",
+        subtitle: "Interventi da Ricevimento/Lavanderia, firma tecnico & presenze",
+        badge: "Manutenzione",
+        accent: "from-orange-900 to-slate-800",
+        icon: "🔧"
+      },
+      {
+        id: "personale_contratti",
+        title: "Personale & Contratti",
+        subtitle: "Inserimento dipendenti, ruolo, inizio e fine contratto",
+        badge: "Contratti",
+        accent: "from-violet-900 to-slate-800",
+        icon: "📋"
+      },
+      {
+        id: "storico",
+        title: "Storico Generale",
+        subtitle: "Storico PDF presenze & manutenzioni + Report Completo con filtri",
+        badge: "Archivio & PDF",
+        accent: "from-zinc-900 to-slate-800",
+        icon: "🗂️"
       }
-      return btoa(bin);
+    ];
+
+    function getTodayIso() {
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
     }
 
-    function base64ToUint8Array(b64) {
-      const binary = atob(b64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      return bytes;
+    function getCurrentMonthYm() {
+      return getTodayIso().slice(0, 7);
     }
 
-    async function buildBlankWorkbookBase64() {
-      const wb = new ExcelJS.Workbook();
-      const ws = wb.addWorksheet("Foglio1");
-      ws.addRow(["Voce", "Dettagli", "Note", "Stato"]);
-      for (let r = 2; r <= 12; r++) {
-        ws.addRow(["", "", "", ""]);
-      }
-      ws.columns = [{ width: 24 }, { width: 28 }, { width: 24 }, { width: 18 }];
-      const buf = await wb.xlsx.writeBuffer();
-      return uint8ArrayToBase64(new Uint8Array(buf));
+    function nowTimestamp() {
+      return new Date().toLocaleString("it-IT", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    }
+
+    function getDaysInMonth(ym) {
+      const [yStr, mStr] = (ym || getCurrentMonthYm()).split("-");
+      const year = Number(yStr) || 2026;
+      const month = Number(mStr) || 11;
+      const count = new Date(year, month, 0).getDate();
+      return Array.from({ length: count }, (_, idx) => {
+        const day = idx + 1;
+        return `${yStr}-${mStr}-${String(day).padStart(2, "0")}`;
+      });
+    }
+
+    function createInitialData() {
+      const today = getTodayIso();
+      return {
+        staff: [
+          {
+            id: "st-1",
+            name: "Giulia Conti",
+            role: "Capo Ricevimento",
+            department: "Ricevimento",
+            contractStart: "2026-03-01",
+            contractEnd: "2026-11-30"
+          },
+          {
+            id: "st-2",
+            name: "Marco Ferretti",
+            role: "Addetto Ricevimento",
+            department: "Ricevimento",
+            contractStart: "2026-04-01",
+            contractEnd: "2026-10-31"
+          },
+          {
+            id: "st-3",
+            name: "Elena Rinaldi",
+            role: "Responsabile Lavanderia",
+            department: "Lavanderia",
+            contractStart: "2026-02-15",
+            contractEnd: "2026-12-20"
+          },
+          {
+            id: "st-4",
+            name: "Luca Bernardi",
+            role: "Maître di Sala",
+            department: "Sala",
+            contractStart: "2026-03-10",
+            contractEnd: "2026-11-15"
+          },
+          {
+            id: "st-5",
+            name: "Sara Neri",
+            role: "Cameriera di Sala",
+            department: "Sala",
+            contractStart: "2026-05-01",
+            contractEnd: "2026-12-31"
+          },
+          {
+            id: "st-6",
+            name: "Chef Antonio Greco",
+            role: "Capo Partita Cucina",
+            department: "Cucina",
+            contractStart: "2026-01-10",
+            contractEnd: "2026-12-31"
+          },
+          {
+            id: "st-7",
+            name: "Davide Lombardi",
+            role: "Cuoco",
+            department: "Cucina",
+            contractStart: "2026-04-15",
+            contractEnd: "2026-10-25"
+          },
+          {
+            id: "st-8",
+            name: "Samir Haddad",
+            role: "Addetto Plonge",
+            department: "Plonge",
+            contractStart: "2026-03-20",
+            contractEnd: "2026-11-30"
+          },
+          {
+            id: "st-9",
+            name: "Paolo Mancini",
+            role: "Manutentore",
+            department: "Manutenzione",
+            contractStart: "2026-01-01",
+            contractEnd: "2026-12-31"
+          }
+        ],
+        attendanceLogByDate: {
+          [today]: {
+            "st-1": { status: "Presente", reason: "" },
+            "st-2": { status: "Riposo", reason: "Riposo settimanale programmato" },
+            "st-3": { status: "Presente", reason: "" },
+            "st-4": { status: "Malattia", reason: "Influenza stagionale con certificato" },
+            "st-5": { status: "Presente", reason: "" },
+            "st-6": { status: "Presente", reason: "" },
+            "st-7": { status: "Ferie", reason: "Ferie estive/autunnali approvate" },
+            "st-8": { status: "Presente", reason: "" },
+            "st-9": { status: "Presente", reason: "" }
+          }
+        },
+        mealsByDate: {
+          [today]: { colazione: 64, pranzo: 38, cena: 79 }
+        },
+        directorNotes: [
+          {
+            id: "note-1",
+            title: "Controllo coperti e intolleranze serali",
+            message: "Verificare con Sala e Cucina il tavolo gruppo alle 20:00 e segnalare eventuali allergie.",
+            target: "Tutti",
+            importance: "Alta",
+            authorRole: "Direttore",
+            signedBy: "Direzione Generale",
+            createdAt: "19/11/2026, 09:15"
+          }
+        ],
+        deptCommunications: [
+          {
+            id: "comm-1",
+            department: "Sala",
+            message: "Pronti i tavoli della veranda per il servizio pranzo.",
+            signedBy: "Luca Bernardi",
+            createdAt: "19/11/2026, 10:05"
+          }
+        ],
+        maintenances: [
+          {
+            id: "mnt-1",
+            area: "Camera 204",
+            description: "Perdita leggera rubinetto lavabo",
+            priority: "Alta",
+            fromRole: "Capo Ricevimento",
+            signedBy: "Giulia Conti",
+            assignedTechnician: "Paolo Mancini",
+            status: "Aperta",
+            createdAt: "19/11/2026, 09:40"
+          }
+        ],
+        readyRoomsAlerts: [
+          {
+            id: "rm-1",
+            room: "Camera 102",
+            notes: "Sanificata e pronta per check-in anticipato",
+            signedBy: "Elena Rinaldi",
+            createdAt: "19/11/2026, 10:30",
+            acknowledgedBy: ["Ricevimento"]
+          }
+        ],
+        guestComplaints: [
+          {
+            id: "cmp-1",
+            guestName: "Sig.ra Marianna Rossi",
+            room: "Camera 312",
+            category: "Rumore / Comfort",
+            description: "Segnalata ventola esterna rumorosa durante la notte.",
+            severity: "Alta",
+            signedBy: "Giulia Conti",
+            status: "Aperta",
+            createdAt: "19/11/2026, 08:50"
+          }
+        ],
+        history: [
+          {
+            id: "his-1",
+            type: "Note Direzione",
+            department: "Tutti",
+            summary: "[Alta] Controllo coperti e intolleranze serali → Tutti (Firma: Direzione Generale)",
+            detail: "Verificare con Sala e Cucina il tavolo gruppo alle 20:00.",
+            createdAt: "19/11/2026, 09:15"
+          },
+          {
+            id: "his-2",
+            type: "Manutenzioni",
+            department: "Manutenzione",
+            summary: "[Alta] Camera 204: Perdita leggera rubinetto lavabo (Firma: Giulia Conti • Tecnico: Paolo Mancini)",
+            detail: "Stato: Aperta",
+            createdAt: "19/11/2026, 09:40"
+          }
+        ]
+      };
     }
 
     function App() {
-      const [tiles, setTiles] = useState(() => {
+      const [data, setData] = useState(() => {
         try {
           const saved = localStorage.getItem(STORAGE_KEY);
           if (saved) {
             const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            if (parsed && Array.isArray(parsed.staff)) {
+              return {
+                ...createInitialData(),
+                ...parsed
+              };
+            }
           }
         } catch (e) {}
-        return INITIAL_TILES;
+        return createInitialData();
       });
 
-      const [activeId, setActiveId] = useState(null);
-      const [zoom, setZoom] = useState(100);
-      const [rows, setRows] = useState([]);
-      const [message, setMessage] = useState("");
-      const inputRefs = useRef({});
+      const [activeSquareId, setActiveSquareId] = useState(null);
+      const [selectedDate, setSelectedDate] = useState(getTodayIso());
+      const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthYm());
+      const [directorDeptView, setDirectorDeptView] = useState("Tutti");
+      const [directorPresenceMode, setDirectorPresenceMode] = useState("giornaliera");
+      const [attendanceDraft, setAttendanceDraft] = useState({});
+      const [presenceNameSearch, setPresenceNameSearch] = useState("");
+      const [restNameSearch, setRestNameSearch] = useState("");
+      const [toast, setToast] = useState("");
+      const [historyFilter, setHistoryFilter] = useState("Tutti");
+      const [deferredPrompt, setDeferredPrompt] = useState(null);
+
+      // Stato Report Completo & Filtri PDF
+      const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+      const [reportFilters, setReportFilters] = useState({
+        dateFrom: "",
+        dateTo: "",
+        month: getCurrentMonthYm(),
+        department: "Tutti",
+        attendanceStatus: "Tutti",
+        maintenanceStatus: "Tutti",
+        maintenancePriority: "Tutti",
+        historyCategory: "Tutti",
+        searchText: ""
+      });
+
+      const [noteForm, setNoteForm] = useState({
+        title: "",
+        message: "",
+        target: "Tutti",
+        importance: "Media",
+        signedBy: ""
+      });
+
+      const [commForm, setCommForm] = useState({
+        message: "",
+        signedBy: ""
+      });
+
+      const [maintForm, setMaintForm] = useState({
+        area: "",
+        description: "",
+        priority: "Media",
+        signedBy: "",
+        assignedTechnician: "Paolo Mancini"
+      });
+
+      const [readyRoomForm, setReadyRoomForm] = useState({
+        room: "",
+        notes: "",
+        signedBy: ""
+      });
+
+      const [complaintForm, setComplaintForm] = useState({
+        guestName: "",
+        room: "",
+        category: "Camera / Pulizia",
+        description: "",
+        severity: "Media",
+        signedBy: ""
+      });
+
+      const [staffForm, setStaffForm] = useState({
+        name: "",
+        role: "",
+        department: "Ricevimento",
+        contractStart: getTodayIso(),
+        contractEnd: ""
+      });
 
       useEffect(() => {
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
         } catch (e) {}
-      }, [tiles]);
+      }, [data]);
 
-      const showBanner = (text) => {
-        setMessage(text);
-        setTimeout(() => {
-          setMessage((prev) => (prev === text ? "" : prev));
-        }, 3000);
-      };
-
-      const addTile = () => {
-        const n = tiles.length + 1;
-        setTiles((prev) => [
-          ...prev,
-          {
-            id: `t-${Date.now()}`,
-            title: `Scheda ${n}`,
-            fileName: `Scheda_${n}.xlsx`,
-            hasFile: false,
-            workbookBase64: null
-          }
-        ]);
-        showBanner("Nuovo riquadro aggiunto.");
-      };
-
-      const handleUploadFile = (tileId, file) => {
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-          try {
-            const bytes = new Uint8Array(ev.target.result);
-            const wb = new ExcelJS.Workbook();
-            await wb.xlsx.load(bytes.buffer);
-            const b64 = uint8ArrayToBase64(bytes);
-
-            setTiles((prev) =>
-              prev.map((t) =>
-                t.id === tileId
-                  ? {
-                      ...t,
-                      fileName: file.name,
-                      hasFile: true,
-                      workbookBase64: b64
-                    }
-                  : t
-              )
-            );
-            showBanner(`File "${file.name}" caricato.`);
-          } catch (err) {
-            showBanner("Errore nella lettura del file .xlsx.");
-          }
-        };
-        reader.readAsArrayBuffer(file);
-      };
-
-      const downloadTileFile = async (tile) => {
-        try {
-          let b64 = tile.workbookBase64;
-          if (tile.id === activeId && rows.length > 0) {
-            const wb = new ExcelJS.Workbook();
-            if (b64) {
-              await wb.xlsx.load(base64ToUint8Array(b64).buffer);
+      useEffect(() => {
+        const dayMap = data.attendanceLogByDate?.[selectedDate] || {};
+        setAttendanceDraft((prev) => {
+          const next = { ...prev };
+          data.staff.forEach((p) => {
+            if (dayMap[p.id]) {
+              next[p.id] = {
+                status: dayMap[p.id].status || "Presente",
+                reason: dayMap[p.id].reason || ""
+              };
+            } else if (!next[p.id]) {
+              next[p.id] = { status: "Presente", reason: "" };
             }
-            const ws = wb.worksheets[0] || wb.addWorksheet("Foglio1");
-            ws.spliceRows(1, ws.rowCount);
-            rows.forEach((r) => ws.addRow(r));
-            const buf = await wb.xlsx.writeBuffer();
-            b64 = uint8ArrayToBase64(new Uint8Array(buf));
-            setTiles((prev) =>
-              prev.map((t) => (t.id === tile.id ? { ...t, hasFile: true, workbookBase64: b64 } : t))
-            );
-          }
-
-          if (!b64) {
-            b64 = await buildBlankWorkbookBase64();
-          }
-
-          const bytes = base64ToUint8Array(b64);
-          const blob = new Blob([bytes], {
-            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = tile.fileName || `${tile.title}.xlsx`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          showBanner(`Scaricato "${tile.fileName || `${tile.title}.xlsx`}".`);
-        } catch (err) {
-          showBanner("Impossibile scaricare il file.");
-        }
+          return next;
+        });
+      }, [data.staff, selectedDate, data.attendanceLogByDate]);
+
+      useEffect(() => {
+        let manifestUrl = "";
+        try {
+          const manifestObj = {
+            name: "Hotel Capi Servizio Hub",
+            short_name: "Capi Servizio",
+            start_url: ".",
+            display: "standalone",
+            background_color: "#f1f5f9",
+            theme_color: "#0f172a"
+          };
+          const blob = new Blob([JSON.stringify(manifestObj)], {
+            type: "application/json"
+          });
+          manifestUrl = URL.createObjectURL(blob);
+          const link = document.createElement("link");
+          link.rel = "manifest";
+          link.href = manifestUrl;
+          document.head.appendChild(link);
+        } catch (e) {}
+
+        const onBeforeInstall = (e) => {
+          e.preventDefault();
+          setDeferredPrompt(e);
+        };
+        window.addEventListener("beforeinstallprompt", onBeforeInstall);
+
+        return () => {
+          window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+          if (manifestUrl) URL.revokeObjectURL(manifestUrl);
+        };
+      }, []);
+
+      const notify = (msg) => {
+        setToast(msg);
+        setTimeout(() => setToast((prev) => (prev === msg ? "" : prev)), 3200);
       };
 
-      const openSheetView = async (tile) => {
-        setActiveId(tile.id);
-        setZoom(100);
-        const wb = new ExcelJS.Workbook();
-        const b64 = tile.workbookBase64 || (await buildBlankWorkbookBase64());
-        await wb.xlsx.load(base64ToUint8Array(b64).buffer);
-        const ws = wb.worksheets[0];
+      const pushHistory = ({ type, department, summary, detail }) => {
+        const entry = {
+          id: `his-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type,
+          department,
+          summary,
+          detail: detail || "",
+          createdAt: nowTimestamp()
+        };
+        setData((prev) => ({
+          ...prev,
+          history: [entry, ...prev.history]
+        }));
+      };
 
-        const maxR = Math.max(12, ws.rowCount || 12);
-        const maxC = Math.max(4, ws.columnCount || 4);
-        const matrix = [];
+      const activeSquare = SERVICE_SQUARES.find((s) => s.id === activeSquareId) || null;
+      const isDirectorOrVice =
+        activeSquareId === "direttore" || activeSquareId === "vice_direttore";
+      const canViewReport = isDirectorOrVice;
+      const actorLabel = activeSquare ? activeSquare.title : "Capo Servizio";
 
-        for (let r = 1; r <= maxR; r++) {
-          const rowVals = [];
-          for (let c = 1; c <= maxC; c++) {
-            const v = ws.getRow(r).getCell(c).value;
-            if (v === null || v === undefined) {
-              rowVals.push("");
-            } else if (typeof v === "object") {
-              rowVals.push(String(v.result ?? v.text ?? ""));
-            } else {
-              rowVals.push(String(v));
+      useEffect(() => {
+        if (!canViewReport && isReportModalOpen) {
+          setIsReportModalOpen(false);
+        }
+      }, [canViewReport, isReportModalOpen]);
+
+      const techniciansList = useMemo(
+        () => data.staff.filter((s) => s.department === "Manutenzione"),
+        [data.staff]
+      );
+
+      const renderStaffSignatureSelect = (value, onChange, labelText = "Firma") => (
+        <div>
+          <label className="block text-xs font-semibold text-slate-600 mb-1">
+            {labelText}
+          </label>
+          <select
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm font-semibold text-slate-900"
+          >
+            <option value="">{actorLabel} (predefinita)</option>
+            {data.staff.map((person) => (
+              <option key={person.id} value={person.name}>
+                {person.name} — {person.role} ({person.department})
+              </option>
+            ))}
+          </select>
+        </div>
+      );
+
+      const currentMeals = data.mealsByDate?.[selectedDate] || {
+        colazione: 0,
+        pranzo: 0,
+        cena: 0
+      };
+
+      const updateMealValue = (field, rawVal) => {
+        const num = Math.max(0, parseInt(rawVal || "0", 10) || 0);
+        setData((prev) => ({
+          ...prev,
+          mealsByDate: {
+            ...(prev.mealsByDate || {}),
+            [selectedDate]: {
+              colazione: prev.mealsByDate?.[selectedDate]?.colazione ?? 0,
+              pranzo: prev.mealsByDate?.[selectedDate]?.pranzo ?? 0,
+              cena: prev.mealsByDate?.[selectedDate]?.cena ?? 0,
+              [field]: num
             }
           }
-          matrix.push(rowVals);
+        }));
+      };
+
+      const saveMeals = (e) => {
+        e.preventDefault();
+        pushHistory({
+          type: "Coperti Ospiti",
+          department: "Ricevimento",
+          summary: `Coperti ${selectedDate}: Colazione ${currentMeals.colazione}, Pranzo ${currentMeals.pranzo}, Cena ${currentMeals.cena}`,
+          detail: "Visibile a Sala e Cucina"
+        });
+        notify(`Coperti del ${selectedDate} salvati e condivisi con Sala e Cucina.`);
+      };
+
+      const setDraftStatus = (personId, newStatus) => {
+        setAttendanceDraft((prev) => ({
+          ...prev,
+          [personId]: {
+            status: newStatus,
+            reason: ABSENCE_STATUSES.has(newStatus) ? prev[personId]?.reason || "" : ""
+          }
+        }));
+      };
+
+      const setDraftReason = (personId, reasonText) => {
+        setAttendanceDraft((prev) => ({
+          ...prev,
+          [personId]: {
+            status: prev[personId]?.status || "Presente",
+            reason: reasonText
+          }
+        }));
+      };
+
+      const saveAttendanceForGroup = (groupStaff, deptLabel) => {
+        for (const person of groupStaff) {
+          const entry = attendanceDraft[person.id] || { status: "Presente", reason: "" };
+          if (ABSENCE_STATUSES.has(entry.status) && !entry.reason.trim()) {
+            notify(`Inserisci il motivo per ${person.name} (${entry.status}).`);
+            return;
+          }
         }
-        setRows(matrix);
+
+        const updatedDayMap = { ...(data.attendanceLogByDate?.[selectedDate] || {}) };
+        const summaryLines = [];
+
+        groupStaff.forEach((person) => {
+          const entry = attendanceDraft[person.id] || { status: "Presente", reason: "" };
+          const cleanReason = ABSENCE_STATUSES.has(entry.status) ? entry.reason.trim() : "";
+          updatedDayMap[person.id] = {
+            status: entry.status,
+            reason: cleanReason
+          };
+          summaryLines.push(
+            `${person.name}: ${entry.status}${cleanReason ? ` (${cleanReason})` : ""}`
+          );
+        });
+
+        setData((prev) => ({
+          ...prev,
+          attendanceLogByDate: {
+            ...(prev.attendanceLogByDate || {}),
+            [selectedDate]: updatedDayMap
+          }
+        }));
+
+        pushHistory({
+          type: "Presenze",
+          department: deptLabel,
+          summary: `Presenze ${deptLabel} (${selectedDate}): ${groupStaff.length} operatori`,
+          detail: summaryLines.join(" • ")
+        });
+
+        notify(`Presenze di ${deptLabel} (${selectedDate}) salvate nello storico.`);
       };
 
-      const printSheet = () => {
-        window.print();
+      const submitDirectorNote = (e) => {
+        e.preventDefault();
+        if (!noteForm.title.trim() || !noteForm.message.trim()) {
+          notify("Inserisci Titolo e Messaggio della nota.");
+          return;
+        }
+        const signer = noteForm.signedBy.trim() || actorLabel;
+        const newNote = {
+          id: `note-${Date.now()}`,
+          title: noteForm.title.trim(),
+          message: noteForm.message.trim(),
+          target: noteForm.target,
+          importance: noteForm.importance,
+          authorRole: actorLabel,
+          signedBy: signer,
+          createdAt: nowTimestamp()
+        };
+        setData((prev) => ({
+          ...prev,
+          directorNotes: [newNote, ...prev.directorNotes]
+        }));
+        pushHistory({
+          type: "Note Direzione",
+          department: noteForm.target,
+          summary: `[${newNote.importance}] ${newNote.title} → ${newNote.target} (Firma: ${signer})`,
+          detail: newNote.message
+        });
+        setNoteForm({
+          title: "",
+          message: "",
+          target: "Tutti",
+          importance: "Media",
+          signedBy: ""
+        });
+        notify("Nota inviata e firmata.");
       };
 
-      const activeTile = tiles.find((t) => t.id === activeId) || null;
-      const scaleFactor = zoom / 100;
+      const submitDeptCommunication = (e, deptName) => {
+        e.preventDefault();
+        if (!commForm.message.trim()) {
+          notify("Scrivi una comunicazione prima di inviare.");
+          return;
+        }
+        const signer = commForm.signedBy.trim() || actorLabel;
+        const comm = {
+          id: `comm-${Date.now()}`,
+          department: deptName,
+          message: commForm.message.trim(),
+          signedBy: signer,
+          createdAt: nowTimestamp()
+        };
+        setData((prev) => ({
+          ...prev,
+          deptCommunications: [comm, ...prev.deptCommunications]
+        }));
+        pushHistory({
+          type: "Comunicazioni",
+          department: deptName,
+          summary: `Comunicazione ${deptName} (Firma: ${signer})`,
+          detail: comm.message
+        });
+        setCommForm({ message: "", signedBy: "" });
+        notify(`Comunicazione inviata e firmata da ${signer}.`);
+      };
 
-      return (
-        <div className="min-h-screen w-full px-4 sm:px-6 lg:px-8 py-6">
-          <div className="w-full max-w-[1640px] mx-auto space-y-6">
-            {message && (
-              <div className="no-print rounded-2xl bg-slate-900 text-white px-5 py-3 text-sm font-medium shadow">
-                {message}
+      const createMaintenanceTicket = ({
+        area,
+        description,
+        priority,
+        fromRole,
+        signedBy,
+        assignedTechnician
+      }) => {
+        if (!area.trim() || !description.trim()) {
+          notify("Compila Camera/Area e Descrizione dell'intervento.");
+          return false;
+        }
+        const signer = (signedBy || "").trim() || fromRole;
+        const tech =
+          (assignedTechnician || "").trim() ||
+          techniciansList[0]?.name ||
+          "Da assegnare";
+
+        const ticket = {
+          id: `mnt-${Date.now()}`,
+          area: area.trim(),
+          description: description.trim(),
+          priority: priority || "Media",
+          fromRole,
+          signedBy: signer,
+          assignedTechnician: tech,
+          status: "Aperta",
+          createdAt: nowTimestamp()
+        };
+        setData((prev) => ({
+          ...prev,
+          maintenances: [ticket, ...prev.maintenances]
+        }));
+        pushHistory({
+          type: "Manutenzioni",
+          department: "Manutenzione",
+          summary: `[${ticket.priority}] ${ticket.area}: ${ticket.description} (Firma: ${signer} • Tecnico: ${tech})`,
+          detail: `Inviato da ${fromRole} • Stato: Aperta`
+        });
+        return true;
+      };
+
+      const submitMaintenanceFromReception = (e) => {
+        e.preventDefault();
+        const ok = createMaintenanceTicket({
+          area: maintForm.area,
+          description: maintForm.description,
+          priority: maintForm.priority,
+          fromRole: actorLabel,
+          signedBy: maintForm.signedBy,
+          assignedTechnician: maintForm.assignedTechnician
+        });
+        if (ok) {
+          setMaintForm({
+            area: "",
+            description: "",
+            priority: "Media",
+            signedBy: "",
+            assignedTechnician: techniciansList[0]?.name || "Paolo Mancini"
+          });
+          notify("Intervento di manutenzione inviato e firmato.");
+        }
+      };
+
+      const toggleMaintenanceStatus = (ticketId) => {
+        let updatedTitle = "";
+        setData((prev) => ({
+          ...prev,
+          maintenances: prev.maintenances.map((m) => {
+            if (m.id !== ticketId) return m;
+            const nextStatus = m.status === "Aperta" ? "Completata" : "Aperta";
+            updatedTitle = `${m.area} (${m.description}) → ${nextStatus} [Tecnico: ${m.assignedTechnician || "N/D"}]`;
+            return { ...m, status: nextStatus };
+          })
+        }));
+        if (updatedTitle) {
+          pushHistory({
+            type: "Manutenzioni",
+            department: "Manutenzione",
+            summary: `Aggiornamento stato: ${updatedTitle}`,
+            detail: `Aggiornato da ${actorLabel}`
+          });
+          notify("Stato manutenzione aggiornato.");
+        }
+      };
+
+      const updateMaintenanceTechnician = (ticketId, techName) => {
+        let info = null;
+        setData((prev) => ({
+          ...prev,
+          maintenances: prev.maintenances.map((m) => {
+            if (m.id !== ticketId) return m;
+            info = { area: m.area, description: m.description, techName };
+            return { ...m, assignedTechnician: techName };
+          })
+        }));
+        if (info) {
+          pushHistory({
+            type: "Manutenzioni",
+            department: "Manutenzione",
+            summary: `Tecnico assegnato per ${info.area}: ${techName || "Non assegnato"}`,
+            detail: `${info.description} • Aggiornato da ${actorLabel}`
+          });
+          notify(`Esecutore aggiornato: ${techName || "Non assegnato"}.`);
+        }
+      };
+
+      const submitReadyRoomAlert = (e) => {
+        e.preventDefault();
+        if (!readyRoomForm.room.trim()) {
+          notify("Inserisci il numero o nome della camera pronta.");
+          return;
+        }
+        const signer = readyRoomForm.signedBy.trim() || "Elena Rinaldi";
+        const alertItem = {
+          id: `rm-${Date.now()}`,
+          room: readyRoomForm.room.trim(),
+          notes: readyRoomForm.notes.trim() || "Camera pronta e riordinata",
+          signedBy: signer,
+          createdAt: nowTimestamp(),
+          acknowledgedBy: []
+        };
+        setData((prev) => ({
+          ...prev,
+          readyRoomsAlerts: [alertItem, ...prev.readyRoomsAlerts]
+        }));
+        pushHistory({
+          type: "Camere Pronte",
+          department: "Lavanderia",
+          summary: `${alertItem.room} pronta → Avviso a Ricevimento, Direttore e Vice Direttore (Firma: ${signer})`,
+          detail: alertItem.notes
+        });
+        setReadyRoomForm({ room: "", notes: "", signedBy: "" });
+        notify(`Avviso inviato per ${alertItem.room} a Ricevimento, Direttore e Vice Direttore.`);
+      };
+
+      const acknowledgeReadyRoom = (alertId, receiverName) => {
+        setData((prev) => ({
+          ...prev,
+          readyRoomsAlerts: prev.readyRoomsAlerts.map((item) => {
+            if (item.id !== alertId) return item;
+            const current = item.acknowledgedBy || [];
+            if (current.includes(receiverName)) return item;
+            return { ...item, acknowledgedBy: [...current, receiverName] };
+          })
+        }));
+        notify(`Confermata ricezione avviso camera da ${receiverName}.`);
+      };
+
+      const submitGuestComplaint = (e) => {
+        e.preventDefault();
+        if (!complaintForm.guestName.trim() || !complaintForm.description.trim()) {
+          notify("Inserisci nome cliente e dettaglio della lamentela.");
+          return;
+        }
+        const signer = complaintForm.signedBy.trim() || "Giulia Conti";
+        const complaint = {
+          id: `cmp-${Date.now()}`,
+          guestName: complaintForm.guestName.trim(),
+          room: complaintForm.room.trim() || "N/D",
+          category: complaintForm.category,
+          description: complaintForm.description.trim(),
+          severity: complaintForm.severity,
+          signedBy: signer,
+          status: "Aperta",
+          createdAt: nowTimestamp()
+        };
+        setData((prev) => ({
+          ...prev,
+          guestComplaints: [complaint, ...prev.guestComplaints]
+        }));
+        pushHistory({
+          type: "Lamentele Clienti",
+          department: "Ricevimento",
+          summary: `[${complaint.severity}] Lamentela ${complaint.guestName} (${complaint.room}) → Direttore & Vice (Firma: ${signer})`,
+          detail: `${complaint.category}: ${complaint.description}`
+        });
+        setComplaintForm({
+          guestName: "",
+          room: "",
+          category: "Camera / Pulizia",
+          description: "",
+          severity: "Media",
+          signedBy: ""
+        });
+        notify("Lamentela cliente registrata e inviata a Direttore e Vice Direttore.");
+      };
+
+      const toggleComplaintStatus = (complaintId) => {
+        let nextStatus = "Gestita";
+        let guestLabel = "";
+        setData((prev) => ({
+          ...prev,
+          guestComplaints: prev.guestComplaints.map((c) => {
+            if (c.id !== complaintId) return c;
+            nextStatus = c.status === "Aperta" ? "Gestita" : "Aperta";
+            guestLabel = `${c.guestName} (${c.room})`;
+            return { ...c, status: nextStatus };
+          })
+        }));
+        if (guestLabel) {
+          pushHistory({
+            type: "Lamentele Clienti",
+            department: "Direzione",
+            summary: `Lamentela ${guestLabel} → ${nextStatus}`,
+            detail: `Aggiornato da ${actorLabel}`
+          });
+          notify(`Stato lamentela aggiornato a "${nextStatus}".`);
+        }
+      };
+
+      const addStaffMember = (e) => {
+        e.preventDefault();
+        if (!staffForm.name.trim() || !staffForm.role.trim() || !staffForm.contractStart) {
+          notify("Compila Nome, Ruolo e Data inizio contratto.");
+          return;
+        }
+        const member = {
+          id: `st-${Date.now()}`,
+          name: staffForm.name.trim(),
+          role: staffForm.role.trim(),
+          department: staffForm.department,
+          contractStart: staffForm.contractStart,
+          contractEnd: staffForm.contractEnd || "Indeterminato"
+        };
+        setData((prev) => ({
+          ...prev,
+          staff: [...prev.staff, member]
+        }));
+        pushHistory({
+          type: "Personale & Contratti",
+          department: member.department,
+          summary: `Nuovo dipendente: ${member.name} (${member.role} - ${member.department})`,
+          detail: `Contratto dal ${member.contractStart} al ${member.contractEnd}`
+        });
+        setStaffForm({
+          name: "",
+          role: "",
+          department: "Ricevimento",
+          contractStart: getTodayIso(),
+          contractEnd: ""
+        });
+        notify(`Dipendente "${member.name}" aggiunto con contratto.`);
+      };
+
+      const removeStaffMember = (id) => {
+        const target = data.staff.find((s) => s.id === id);
+        setData((prev) => ({
+          ...prev,
+          staff: prev.staff.filter((s) => s.id !== id)
+        }));
+        if (target) {
+          pushHistory({
+            type: "Personale & Contratti",
+            department: target.department,
+            summary: `Rimosso dipendente: ${target.name} (${target.role})`,
+            detail: `Reparto ${target.department}`
+          });
+          notify(`Rimosso "${target.name}".`);
+        }
+      };
+
+      const staffByDept = useMemo(() => {
+        const map = {
+          ricevimento: [],
+          lavanderia: [],
+          sala: [],
+          cucina: [],
+          plonge: [],
+          manutenzione: []
+        };
+        data.staff.forEach((s) => {
+          if (s.department === "Ricevimento") map.ricevimento.push(s);
+          else if (s.department === "Lavanderia") map.lavanderia.push(s);
+          else if (s.department === "Sala") map.sala.push(s);
+          else if (s.department === "Cucina") map.cucina.push(s);
+          else if (s.department === "Plonge") map.plonge.push(s);
+          else if (s.department === "Manutenzione") map.manutenzione.push(s);
+        });
+        return map;
+      }, [data.staff]);
+
+      const openComplaintsCount = data.guestComplaints.filter((c) => c.status === "Aperta").length;
+
+      // Righe presenze filtrate per Report Completo e PDF
+      const filteredAttendanceRows = useMemo(() => {
+        const rows = [];
+        const logByDate = data.attendanceLogByDate || {};
+
+        Object.entries(logByDate)
+          .sort(([a], [b]) => b.localeCompare(a))
+          .forEach(([dateStr, dayMap]) => {
+            if (reportFilters.dateFrom && dateStr < reportFilters.dateFrom) return;
+            if (reportFilters.dateTo && dateStr > reportFilters.dateTo) return;
+            if (
+              !reportFilters.dateFrom &&
+              !reportFilters.dateTo &&
+              reportFilters.month &&
+              !dateStr.startsWith(reportFilters.month)
+            ) {
+              return;
+            }
+
+            Object.entries(dayMap || {}).forEach(([personId, rec]) => {
+              const person = data.staff.find((s) => s.id === personId);
+              if (!person) return;
+              if (
+                reportFilters.department !== "Tutti" &&
+                person.department !== reportFilters.department
+              ) {
+                return;
+              }
+              const status = rec?.status || "Presente";
+              if (
+                reportFilters.attendanceStatus !== "Tutti" &&
+                status !== reportFilters.attendanceStatus
+              ) {
+                return;
+              }
+              const reason = rec?.reason || "—";
+              const hay = `${dateStr} ${person.name} ${person.role} ${person.department} ${status} ${reason}`.toLowerCase();
+              if (
+                reportFilters.searchText.trim() &&
+                !hay.includes(reportFilters.searchText.trim().toLowerCase())
+              ) {
+                return;
+              }
+
+              rows.push({
+                id: `${dateStr}-${person.id}`,
+                date: dateStr,
+                name: person.name,
+                role: person.role,
+                department: person.department,
+                status,
+                reason
+              });
+            });
+          });
+
+        return rows;
+      }, [data.attendanceLogByDate, data.staff, reportFilters]);
+
+      // Righe manutenzioni filtrate per Report Completo e PDF
+      const filteredMaintenanceRows = useMemo(() => {
+        return (data.maintenances || []).filter((m) => {
+          if (
+            reportFilters.maintenanceStatus !== "Tutti" &&
+            m.status !== reportFilters.maintenanceStatus
+          ) {
+            return false;
+          }
+          if (
+            reportFilters.maintenancePriority !== "Tutti" &&
+            m.priority !== reportFilters.maintenancePriority
+          ) {
+            return false;
+          }
+          if (reportFilters.department !== "Tutti") {
+            const deptMatch =
+              (m.fromRole || "").toLowerCase().includes(reportFilters.department.toLowerCase()) ||
+              (m.assignedTechnician || "").toLowerCase().includes(reportFilters.department.toLowerCase()) ||
+              reportFilters.department === "Manutenzione";
+            if (!deptMatch) return false;
+          }
+          const hay = `${m.area} ${m.description} ${m.priority} ${m.status} ${m.fromRole} ${m.signedBy || ""} ${m.assignedTechnician || ""} ${m.createdAt || ""}`.toLowerCase();
+          if (
+            reportFilters.searchText.trim() &&
+            !hay.includes(reportFilters.searchText.trim().toLowerCase())
+          ) {
+            return false;
+          }
+          return true;
+        });
+      }, [data.maintenances, reportFilters]);
+
+      // Storico generale filtrato
+      const filteredHistoryRows = useMemo(() => {
+        const activeCat =
+          reportFilters.historyCategory !== "Tutti"
+            ? reportFilters.historyCategory
+            : historyFilter;
+
+        return (data.history || []).filter((h) => {
+          if (activeCat !== "Tutti" && h.type !== activeCat) return false;
+          if (
+            reportFilters.department !== "Tutti" &&
+            !(h.department || "").toLowerCase().includes(reportFilters.department.toLowerCase())
+          ) {
+            return false;
+          }
+          const hay = `${h.type} ${h.department} ${h.summary} ${h.detail || ""} ${h.createdAt || ""}`.toLowerCase();
+          if (
+            reportFilters.searchText.trim() &&
+            !hay.includes(reportFilters.searchText.trim().toLowerCase())
+          ) {
+            return false;
+          }
+          return true;
+        });
+      }, [data.history, historyFilter, reportFilters]);
+
+      const resetReportFilters = () => {
+        setReportFilters({
+          dateFrom: "",
+          dateTo: "",
+          month: getCurrentMonthYm(),
+          department: "Tutti",
+          attendanceStatus: "Tutti",
+          maintenanceStatus: "Tutti",
+          maintenancePriority: "Tutti",
+          historyCategory: "Tutti",
+          searchText: ""
+        });
+        setHistoryFilter("Tutti");
+        notify("Filtri del Report Completo reimpostati.");
+      };
+
+      const downloadPdfExport = (mode = "COMPLETO") => {
+        try {
+          const jsPdfLib = window.jspdf?.jsPDF;
+          if (!jsPdfLib) {
+            window.print();
+            return;
+          }
+
+          const doc = new jsPdfLib({ orientation: "landscape", unit: "pt", format: "a4" });
+          const titleMap = {
+            PRESENZE: "Storico Presenze Personale — Hotel Capi Servizio Hub",
+            MANUTENZIONI: "Storico Manutenzioni & Interventi — Hotel Capi Servizio Hub",
+            COMPLETO: "Report Completo Presenze, Manutenzioni & Storico — Hotel Capi Servizio Hub"
+          };
+
+          doc.setFontSize(15);
+          doc.setTextColor(15, 23, 42);
+          doc.text(titleMap[mode] || titleMap.COMPLETO, 36, 38);
+
+          doc.setFontSize(9);
+          doc.setTextColor(71, 85, 105);
+          const filterSummary = `Generato il: ${nowTimestamp()} • Reparto: ${reportFilters.department} • Mese: ${reportFilters.month || "Tutti"}${
+            reportFilters.dateFrom ? ` • Dal: ${reportFilters.dateFrom}` : ""
+          }${reportFilters.dateTo ? ` • Al: ${reportFilters.dateTo}` : ""}${
+            reportFilters.searchText ? ` • Ricerca: "${reportFilters.searchText}"` : ""
+          }`;
+          doc.text(filterSummary, 36, 55);
+
+          let cursorY = 72;
+
+          if (mode === "PRESENZE" || mode === "COMPLETO") {
+            doc.setFontSize(11);
+            doc.setTextColor(15, 23, 42);
+            doc.text(`1. Storico Presenze (${filteredAttendanceRows.length} record)`, 36, cursorY);
+
+            doc.autoTable({
+              startY: cursorY + 8,
+              head: [["Data", "Dipendente", "Ruolo", "Reparto", "Stato", "Motivo Assenza"]],
+              body:
+                filteredAttendanceRows.length > 0
+                  ? filteredAttendanceRows.map((r) => [
+                      r.date,
+                      r.name,
+                      r.role,
+                      r.department,
+                      r.status,
+                      r.reason
+                    ])
+                  : [["—", "Nessun record per i filtri selezionati", "—", "—", "—", "—"]],
+              styles: { fontSize: 8, cellPadding: 4 },
+              headStyles: { fillColor: [15, 23, 42], textColor: 255 },
+              margin: { left: 36, right: 36 }
+            });
+
+            cursorY = (doc.lastAutoTable?.finalY || cursorY + 40) + 22;
+          }
+
+          if (mode === "MANUTENZIONI" || mode === "COMPLETO") {
+            if (cursorY > 470) {
+              doc.addPage();
+              cursorY = 42;
+            }
+            doc.setFontSize(11);
+            doc.setTextColor(15, 23, 42);
+            doc.text(`2. Storico Manutenzioni (${filteredMaintenanceRows.length} interventi)`, 36, cursorY);
+
+            doc.autoTable({
+              startY: cursorY + 8,
+              head: [["Area / Camera", "Descrizione", "Priorità", "Stato", "Firma", "Tecnico", "Data/Ora"]],
+              body:
+                filteredMaintenanceRows.length > 0
+                  ? filteredMaintenanceRows.map((m) => [
+                      m.area,
+                      m.description,
+                      m.priority,
+                      m.status,
+                      m.signedBy || m.fromRole || "—",
+                      m.assignedTechnician || "—",
+                      m.createdAt || "—"
+                    ])
+                  : [["—", "Nessuna manutenzione per i filtri selezionati", "—", "—", "—", "—", "—"]],
+              styles: { fontSize: 8, cellPadding: 4 },
+              headStyles: { fillColor: [180, 83, 9], textColor: 255 },
+              margin: { left: 36, right: 36 }
+            });
+
+            cursorY = (doc.lastAutoTable?.finalY || cursorY + 40) + 22;
+          }
+
+          if (mode === "COMPLETO") {
+            if (cursorY > 470) {
+              doc.addPage();
+              cursorY = 42;
+            }
+            doc.setFontSize(11);
+            doc.setTextColor(15, 23, 42);
+            doc.text(`3. Storico Attività (${filteredHistoryRows.length} eventi)`, 36, cursorY);
+
+            doc.autoTable({
+              startY: cursorY + 8,
+              head: [["Categoria", "Reparto", "Riepilogo", "Dettaglio", "Data/Ora"]],
+              body:
+                filteredHistoryRows.length > 0
+                  ? filteredHistoryRows.map((h) => [
+                      h.type,
+                      h.department,
+                      h.summary,
+                      h.detail || "—",
+                      h.createdAt || "—"
+                    ])
+                  : [["—", "—", "Nessun evento per i filtri selezionati", "—", "—"]],
+              styles: { fontSize: 8, cellPadding: 4 },
+              headStyles: { fillColor: [4, 120, 87], textColor: 255 },
+              margin: { left: 36, right: 36 }
+            });
+          }
+
+          const fileSlug =
+            mode === "PRESENZE"
+              ? "Storico_Presenze"
+              : mode === "MANUTENZIONI"
+              ? "Storico_Manutenzioni"
+              : "Report_Completo_Hotel";
+
+          doc.save(`${fileSlug}_${selectedDate}.pdf`);
+          notify(`PDF "${fileSlug}_${selectedDate}.pdf" scaricato.`);
+        } catch (err) {
+          window.print();
+        }
+      };
+
+      const renderAttendanceBlock = (title, subtitle, groupStaff, deptLabel) => {
+        const normalizedPresenceQuery = presenceNameSearch.trim().toLowerCase();
+        const normalizedRestQuery = restNameSearch.trim().toLowerCase();
+
+        const filteredGroupStaff = groupStaff.filter((person) => {
+          if (!normalizedPresenceQuery) return true;
+          const matchesName = (person.name || "").toLowerCase().includes(normalizedPresenceQuery);
+          const matchesRole = (person.role || "").toLowerCase().includes(normalizedPresenceQuery);
+          return matchesName || matchesRole;
+        });
+
+        const restingStaffMatches = groupStaff.filter((person) => {
+          const draft = attendanceDraft[person.id] || { status: "Presente", reason: "" };
+          if (draft.status !== "Riposo") return false;
+          if (!normalizedRestQuery) return true;
+          const matchesName = (person.name || "").toLowerCase().includes(normalizedRestQuery);
+          const matchesReason = (draft.reason || "").toLowerCase().includes(normalizedRestQuery);
+          return matchesName || matchesReason;
+        });
+
+        return (
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">{title}</h3>
+                <p className="text-xs text-slate-500">{subtitle}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => saveAttendanceForGroup(groupStaff, deptLabel)}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-4 py-2 rounded-xl cursor-pointer"
+              >
+                Salva Presenze ({selectedDate})
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-2xl bg-slate-50 border border-slate-200 p-3.5">
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
+                  Ricerca presenza per nome
+                </label>
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    value={presenceNameSearch}
+                    onChange={(e) => setPresenceNameSearch(e.target.value)}
+                    placeholder="Cerca dipendente per nome o ruolo..."
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm pr-8"
+                  />
+                  {presenceNameSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setPresenceNameSearch("")}
+                      title="Pulisci ricerca presenze"
+                      className="absolute right-2.5 text-xs font-bold text-slate-400 hover:text-slate-700 cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-indigo-800 mb-1">
+                  Ricerca riposo per nominativo
+                </label>
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    value={restNameSearch}
+                    onChange={(e) => setRestNameSearch(e.target.value)}
+                    placeholder="Cerca nominativo a riposo..."
+                    className="w-full bg-white border border-indigo-200 rounded-xl px-3 py-2 text-xs sm:text-sm pr-8"
+                  />
+                  {restNameSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setRestNameSearch("")}
+                      title="Pulisci ricerca riposi"
+                      className="absolute right-2.5 text-xs font-bold text-slate-400 hover:text-slate-700 cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {(restNameSearch.trim().length > 0 || restingStaffMatches.length > 0) && (
+              <div className="rounded-2xl bg-indigo-50/80 border border-indigo-200 p-3.5 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-extrabold text-indigo-950">
+                    Riposi trovati ({restingStaffMatches.length})
+                  </span>
+                  <span className="text-[11px] font-semibold text-indigo-700">
+                    Data: {selectedDate}
+                  </span>
+                </div>
+                {restingStaffMatches.length === 0 ? (
+                  <p className="text-xs text-indigo-800/80 italic">
+                    Nessun nominativo a riposo corrisponde a &ldquo;{restNameSearch.trim()}&rdquo;.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {restingStaffMatches.map((person) => {
+                      const draft = attendanceDraft[person.id] || { status: "Riposo", reason: "" };
+                      return (
+                        <div
+                          key={person.id}
+                          className="bg-white border border-indigo-200 rounded-xl px-3 py-1.5 text-xs flex items-center gap-2"
+                        >
+                          <span className="font-bold text-slate-900">{person.name}</span>
+                          <span className="text-slate-500">({person.department})</span>
+                          <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 font-bold text-[10px]">
+                            Riposo
+                          </span>
+                          {draft.reason && (
+                            <span className="text-slate-600">• {draft.reason}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
-            {!activeTile ? (
-              <>
-                <header className="no-print bg-white rounded-3xl border border-slate-200 shadow-sm px-6 py-5 flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <h1 className="text-2xl font-bold text-slate-900">Excel Hub</h1>
-                    <p className="text-sm text-slate-500">
-                      Carica file, scarica file e stampa file — vista orizzontale
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={addTile}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm px-4 py-2.5 rounded-2xl transition cursor-pointer"
-                  >
-                    + Riquadro
-                  </button>
-                </header>
-
-                <section className="no-print grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                  {tiles.map((tile) => (
-                    <article
-                      key={tile.id}
-                      className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 flex flex-col justify-between gap-4"
+            {filteredGroupStaff.length === 0 ? (
+              <p className="text-sm text-slate-400 italic py-3">
+                {groupStaff.length === 0
+                  ? `Nessun dipendente assegnato a ${deptLabel}. Aggiungilo in "Personale & Contratti".`
+                  : `Nessun dipendente trovato per "${presenceNameSearch.trim()}".`}
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {filteredGroupStaff.map((person) => {
+                  const draft = attendanceDraft[person.id] || { status: "Presente", reason: "" };
+                  const needsReason = ABSENCE_STATUSES.has(draft.status);
+                  return (
+                    <div
+                      key={person.id}
+                      className="py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
                     >
                       <div>
-                        <div className="flex items-center justify-between gap-2 mb-2">
-                          <span
-                            className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
-                              tile.hasFile
-                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                : "bg-slate-100 text-slate-500"
-                            }`}
-                          >
-                            {tile.hasFile ? "File caricato" : "Vuoto"}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => openSheetView(tile)}
-                            className="text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 px-3 py-1 rounded-xl cursor-pointer"
-                          >
-                            Apri
-                          </button>
+                        <p className="text-sm font-bold text-slate-900">{person.name}</p>
+                        <p className="text-xs text-slate-500">
+                          {person.role} • Contratto: {person.contractStart} → {person.contractEnd}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <select
+                          value={draft.status}
+                          onChange={(e) => setDraftStatus(person.id, e.target.value)}
+                          className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm font-semibold"
+                        >
+                          {ATTENDANCE_STATUSES.map((st) => (
+                            <option key={st} value={st}>
+                              {st}
+                            </option>
+                          ))}
+                        </select>
+
+                        {needsReason && (
+                          <input
+                            type="text"
+                            value={draft.reason}
+                            onChange={(e) => setDraftReason(person.id, e.target.value)}
+                            placeholder="Motivo assenza / riposo (obbligatorio)"
+                            className="min-w-[230px] bg-amber-50/70 border border-amber-300 rounded-xl px-3 py-2 text-xs sm:text-sm"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      const renderMonthlyPresenceSchematic = (deptFilter = "Tutti") => {
+        const monthDays = getDaysInMonth(selectedMonth);
+        const visibleStaff =
+          deptFilter === "Tutti"
+            ? data.staff
+            : data.staff.filter((s) => s.department === deptFilter);
+
+        const codeMap = {
+          Presente: "P",
+          Riposo: "R",
+          "Assente ingiustificato": "AI",
+          Malattia: "M",
+          Ferie: "F",
+          Infortunio: "I"
+        };
+
+        const badgeColorMap = {
+          Presente: "bg-emerald-100 text-emerald-900 border-emerald-200",
+          Riposo: "bg-slate-200 text-slate-800 border-slate-300",
+          "Assente ingiustificato": "bg-rose-100 text-rose-900 border-rose-200",
+          Malattia: "bg-amber-100 text-amber-900 border-amber-200",
+          Ferie: "bg-sky-100 text-sky-900 border-sky-200",
+          Infortunio: "bg-orange-100 text-orange-900 border-orange-200"
+        };
+
+        return (
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Vista Schematica Mensile Presenze ({selectedMonth})
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Quadro mensile per dipendente con motivo assenza registrato sul giorno
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => downloadPdfExport("PRESENZE")}
+                  className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-3.5 py-2 rounded-xl cursor-pointer"
+                >
+                  Scarica PDF Presenze
+                </button>
+                <input
+                  type="month"
+                  value={selectedMonth}
+                  onChange={(e) => e.target.value && setSelectedMonth(e.target.value)}
+                  className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-bold"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
+              <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-900">P = Presente</span>
+              <span className="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-800">R = Riposo</span>
+              <span className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-900">AI = Assente ingiustificato</span>
+              <span className="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900">M = Malattia</span>
+              <span className="px-2.5 py-1 rounded-lg bg-sky-100 text-sky-900">F = Ferie</span>
+              <span className="px-2.5 py-1 rounded-lg bg-orange-100 text-orange-900">I = Infortunio</span>
+            </div>
+
+            <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead className="bg-slate-100 text-slate-700">
+                  <tr>
+                    <th className="py-2.5 px-3 sticky left-0 bg-slate-100 z-10 min-w-[180px]">
+                      Dipendente / Reparto
+                    </th>
+                    {monthDays.map((dIso) => (
+                      <th key={dIso} className="py-2 px-1.5 text-center font-bold min-w-[34px]">
+                        {dIso.slice(-2)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {visibleStaff.map((person) => (
+                    <tr key={person.id}>
+                      <td className="py-2 px-3 sticky left-0 bg-white z-10 font-semibold text-slate-900 border-r border-slate-100">
+                        <div>{person.name}</div>
+                        <div className="text-[10px] text-slate-400">{person.department}</div>
+                      </td>
+                      {monthDays.map((dIso) => {
+                        const rec = data.attendanceLogByDate?.[dIso]?.[person.id];
+                        const st = rec?.status || "";
+                        const code = st ? codeMap[st] || "•" : "·";
+                        const cls = st
+                          ? badgeColorMap[st] || "bg-slate-100 text-slate-700 border-slate-200"
+                          : "bg-slate-50 text-slate-300 border-transparent";
+                        const titleTxt = st
+                          ? `${dIso} • ${person.name}: ${st}${rec?.reason ? ` — Motivo: ${rec.reason}` : ""}`
+                          : `${dIso} • Nessuna registrazione`;
+                        return (
+                          <td key={dIso} className="p-1 text-center">
+                            <span
+                              title={titleTxt}
+                              className={`inline-flex items-center justify-center w-6 h-6 rounded-md border text-[10px] font-extrabold ${cls}`}
+                            >
+                              {code}
+                            </span>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      };
+
+      const renderNotesBox = (deptName) => {
+        const relevant = data.directorNotes.filter(
+          (n) => n.target === "Tutti" || n.target === deptName || deptName === "Tutti"
+        );
+        const importanceStyle = {
+          Bassa: "bg-slate-100 text-slate-700 border-slate-200",
+          Media: "bg-sky-50 text-sky-800 border-sky-200",
+          Alta: "bg-amber-50 text-amber-800 border-amber-200",
+          Urgente: "bg-rose-50 text-rose-800 border-rose-200"
+        };
+
+        return (
+          <div className="space-y-2.5">
+            {relevant.length === 0 ? (
+              <p className="text-xs text-slate-400 italic">Nessuna nota attiva.</p>
+            ) : (
+              relevant.map((n) => (
+                <div
+                  key={n.id}
+                  className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-1"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-bold text-slate-900">{n.title}</span>
+                    <span
+                      className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
+                        importanceStyle[n.importance] || importanceStyle.Media
+                      }`}
+                    >
+                      {n.importance} → {n.target}
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-slate-700">{n.message}</p>
+                  <p className="text-[11px] text-slate-400">
+                    Firma: <strong className="text-slate-600">{n.signedBy || n.authorRole}</strong> • {n.createdAt}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+        );
+      };
+
+      const renderReadyRoomsBox = (canAcknowledgeAs = null) => (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-slate-900">
+              Avvisi Camere Pronte (Lavanderia)
+            </h3>
+            <span className="text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+              {data.readyRoomsAlerts.length} avvisi
+            </span>
+          </div>
+
+          <div className="space-y-2.5">
+            {data.readyRoomsAlerts.map((item) => {
+              const acks = item.acknowledgedBy || [];
+              return (
+                <div
+                  key={item.id}
+                  className="rounded-2xl border border-emerald-200/80 bg-emerald-50/40 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                >
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-extrabold text-emerald-950">{item.room}</span>
+                      <span className="text-[11px] text-slate-500">
+                        Firma: <strong className="text-slate-700">{item.signedBy || "Lavanderia"}</strong> • {item.createdAt}
+                      </span>
+                    </div>
+                    <p className="text-xs sm:text-sm text-slate-700">{item.notes}</p>
+                    <p className="text-[11px] text-emerald-800 font-medium">
+                      Visto da: {acks.length > 0 ? acks.join(", ") : "In attesa di presa visione"}
+                    </p>
+                  </div>
+
+                  {canAcknowledgeAs && !acks.includes(canAcknowledgeAs) && (
+                    <button
+                      type="button"
+                      onClick={() => acknowledgeReadyRoom(item.id, canAcknowledgeAs)}
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs px-3.5 py-2 rounded-xl shrink-0 cursor-pointer"
+                    >
+                      Conferma Ricezione
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+
+      const renderComplaintsBox = (allowToggleStatus = false) => (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-slate-900">
+              Lamentele Clienti (Ricevimento → Direzione)
+            </h3>
+            <span className="text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 px-2.5 py-0.5 rounded-full">
+              {data.guestComplaints.filter((c) => c.status === "Aperta").length} aperte
+            </span>
+          </div>
+
+          <div className="space-y-2.5">
+            {data.guestComplaints.map((c) => (
+              <div
+                key={c.id}
+                className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+              >
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-bold text-slate-900">
+                      {c.guestName} ({c.room})
+                    </span>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800">
+                      {c.severity}
+                    </span>
+                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                      {c.status}
+                    </span>
+                  </div>
+                  <p className="text-xs font-semibold text-slate-600">{c.category}</p>
+                  <p className="text-xs sm:text-sm text-slate-700">{c.description}</p>
+                  <p className="text-[11px] text-slate-400">
+                    Firma: <strong className="text-slate-600">{c.signedBy || "Ricevimento"}</strong> • {c.createdAt}
+                  </p>
+                </div>
+
+                {allowToggleStatus && (
+                  <button
+                    type="button"
+                    onClick={() => toggleComplaintStatus(c.id)}
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-3.5 py-2 rounded-xl shrink-0 cursor-pointer"
+                  >
+                    {c.status === "Aperta" ? "Segna Gestita" : "Riapri"}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+
+      const renderMaintenanceList = (allowAssignTech = false) => (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-base font-bold text-slate-900">Manutenzioni &amp; Interventi</h3>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => downloadPdfExport("MANUTENZIONI")}
+                className="bg-amber-700 hover:bg-amber-800 text-white font-semibold text-xs px-3 py-1.5 rounded-xl cursor-pointer"
+              >
+                Scarica PDF Manutenzioni
+              </button>
+              <span className="text-xs font-semibold bg-orange-50 text-orange-700 border border-orange-200 px-2.5 py-0.5 rounded-full">
+                {data.maintenances.filter((m) => m.status === "Aperta").length} aperte
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-2.5">
+            {data.maintenances.map((m) => (
+              <div
+                key={m.id}
+                className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+              >
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-bold text-slate-900">{m.area}</span>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-800">
+                      {m.priority}
+                    </span>
+                    <span
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                        m.status === "Completata"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : "bg-amber-100 text-amber-900"
+                      }`}
+                    >
+                      {m.status}
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-slate-700">{m.description}</p>
+                  <p className="text-[11px] text-slate-500">
+                    Segnalato/Firmato da: <strong className="text-slate-700">{m.signedBy || m.fromRole}</strong> • Esecutore: <strong className="text-slate-800">{m.assignedTechnician || "Da assegnare"}</strong> • {m.createdAt}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {allowAssignTech && (
+                    <select
+                      value={m.assignedTechnician || ""}
+                      onChange={(e) => updateMaintenanceTechnician(m.id, e.target.value)}
+                      className="bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-xs font-semibold"
+                    >
+                      <option value="">Chi esegue l&apos;intervento...</option>
+                      {data.staff.map((st) => (
+                        <option key={st.id} value={st.name}>
+                          {st.name} ({st.department})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggleMaintenanceStatus(m.id)}
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-3.5 py-2 rounded-xl cursor-pointer"
+                  >
+                    {m.status === "Aperta" ? "Completa" : "Riapri"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+
+      const renderReportPanelContent = (embedded = false) => {
+        return (
+          <div
+            id="pdf-report-printable"
+            className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
+              <div>
+                <h2 className="text-xl font-black text-slate-900">
+                  Report Completo — Presenze, Manutenzioni &amp; Storico PDF
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Filtra i dati su più criteri e scarica il PDF delle Presenze, delle Manutenzioni o del Report Completo
+                </p>
+              </div>
+
+              <div className="no-print-report flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => downloadPdfExport("PRESENZE")}
+                  className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer"
+                >
+                  PDF Presenze ({filteredAttendanceRows.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadPdfExport("MANUTENZIONI")}
+                  className="bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer"
+                >
+                  PDF Manutenzioni ({filteredMaintenanceRows.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadPdfExport("COMPLETO")}
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-4 py-2.5 rounded-xl cursor-pointer"
+                >
+                  Scarica PDF Report Completo
+                </button>
+                {!embedded && (
+                  <button
+                    type="button"
+                    onClick={() => setIsReportModalOpen(false)}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer"
+                  >
+                    Chiudi ✕
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="no-print-report rounded-2xl bg-slate-50 border border-slate-200 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
+                  Filtri Report Completo
+                </span>
+                <button
+                  type="button"
+                  onClick={resetReportFilters}
+                  className="text-xs font-bold text-rose-700 hover:underline cursor-pointer"
+                >
+                  Azzera filtri
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Mese Presenze
+                  </label>
+                  <input
+                    type="month"
+                    value={reportFilters.month}
+                    onChange={(e) =>
+                      setReportFilters((p) => ({ ...p, month: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Data Dal
+                  </label>
+                  <input
+                    type="date"
+                    value={reportFilters.dateFrom}
+                    onChange={(e) =>
+                      setReportFilters((p) => ({ ...p, dateFrom: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Data Al
+                  </label>
+                  <input
+                    type="date"
+                    value={reportFilters.dateTo}
+                    onChange={(e) =>
+                      setReportFilters((p) => ({ ...p, dateTo: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Reparto
+                  </label>
+                  <select
+                    value={reportFilters.department}
+                    onChange={(e) =>
+                      setReportFilters((p) => ({ ...p, department: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                  >
+                    <option value="Tutti">Tutti i reparti</option>
+                    {DEPARTMENTS.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Stato Presenza
+                  </label>
+                  <select
+                    value={reportFilters.attendanceStatus}
+                    onChange={(e) =>
+                      setReportFilters((p) => ({
+                        ...p,
+                        attendanceStatus: e.target.value
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                  >
+                    <option value="Tutti">Tutti gli stati</option>
+                    {ATTENDANCE_STATUSES.map((st) => (
+                      <option key={st} value={st}>
+                        {st}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Stato Manutenzione
+                  </label>
+                  <select
+                    value={reportFilters.maintenanceStatus}
+                    onChange={(e) =>
+                      setReportFilters((p) => ({
+                        ...p,
+                        maintenanceStatus: e.target.value
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                  >
+                    <option value="Tutti">Tutti gli stati</option>
+                    <option value="Aperta">Aperta</option>
+                    <option value="Completata">Completata</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Priorità Manutenzione
+                  </label>
+                  <select
+                    value={reportFilters.maintenancePriority}
+                    onChange={(e) =>
+                      setReportFilters((p) => ({
+                        ...p,
+                        maintenancePriority: e.target.value
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                  >
+                    <option value="Tutti">Tutte le priorità</option>
+                    {IMPORTANCE_LEVELS.map((lvl) => (
+                      <option key={lvl} value={lvl}>
+                        {lvl}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Ricerca Testo / Firma / Motivo
+                  </label>
+                  <input
+                    type="text"
+                    value={reportFilters.searchText}
+                    onChange={(e) =>
+                      setReportFilters((p) => ({ ...p, searchText: e.target.value }))
+                    }
+                    placeholder="Nome, camera, motivo, firma..."
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-extrabold text-slate-900">
+                  Storico Presenze Filtrato ({filteredAttendanceRows.length})
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => downloadPdfExport("PRESENZE")}
+                  className="no-print-report text-xs font-bold text-slate-900 underline cursor-pointer"
+                >
+                  Scarica PDF Presenze
+                </button>
+              </div>
+              <div className="overflow-x-auto border border-slate-200 rounded-2xl max-h-56">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-slate-100 text-slate-700 sticky top-0">
+                    <tr>
+                      <th className="py-2 px-3">Data</th>
+                      <th className="py-2 px-3">Dipendente</th>
+                      <th className="py-2 px-3">Reparto</th>
+                      <th className="py-2 px-3">Stato</th>
+                      <th className="py-2 px-3">Motivo Assenza</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredAttendanceRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-4 px-3 text-slate-400 italic">
+                          Nessun record presenze per i filtri impostati.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredAttendanceRows.map((r) => (
+                        <tr key={r.id}>
+                          <td className="py-2 px-3 font-semibold">{r.date}</td>
+                          <td className="py-2 px-3 font-bold text-slate-900">{r.name}</td>
+                          <td className="py-2 px-3">{r.department}</td>
+                          <td className="py-2 px-3 font-bold">{r.status}</td>
+                          <td className="py-2 px-3 text-slate-600">{r.reason}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-extrabold text-slate-900">
+                  Storico Manutenzioni Filtrato ({filteredMaintenanceRows.length})
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => downloadPdfExport("MANUTENZIONI")}
+                  className="no-print-report text-xs font-bold text-amber-800 underline cursor-pointer"
+                >
+                  Scarica PDF Manutenzioni
+                </button>
+              </div>
+              <div className="overflow-x-auto border border-slate-200 rounded-2xl max-h-56">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-slate-100 text-slate-700 sticky top-0">
+                    <tr>
+                      <th className="py-2 px-3">Area</th>
+                      <th className="py-2 px-3">Intervento</th>
+                      <th className="py-2 px-3">Priorità</th>
+                      <th className="py-2 px-3">Stato</th>
+                      <th className="py-2 px-3">Firma / Tecnico</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredMaintenanceRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-4 px-3 text-slate-400 italic">
+                          Nessuna manutenzione per i filtri impostati.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredMaintenanceRows.map((m) => (
+                        <tr key={m.id}>
+                          <td className="py-2 px-3 font-bold text-slate-900">{m.area}</td>
+                          <td className="py-2 px-3">{m.description}</td>
+                          <td className="py-2 px-3 font-semibold">{m.priority}</td>
+                          <td className="py-2 px-3 font-bold">{m.status}</td>
+                          <td className="py-2 px-3 text-slate-600">
+                            {m.signedBy || m.fromRole} • Tecnico: {m.assignedTechnician || "N/D"}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const renderDeptCommunicationsBox = (deptName) => {
+        const list = data.deptCommunications.filter(
+          (c) => c.department === deptName || deptName === "Tutti"
+        );
+        return (
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3">
+            <h3 className="text-base font-bold text-slate-900">
+              Comunicazioni ({deptName === "Tutti" ? "Tutti i reparti" : deptName})
+            </h3>
+            {list.length === 0 ? (
+              <p className="text-xs text-slate-400 italic">Nessuna comunicazione inserita.</p>
+            ) : (
+              <div className="space-y-2">
+                {list.map((c) => (
+                  <div
+                    key={c.id}
+                    className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 space-y-1"
+                  >
+                    <p className="text-xs sm:text-sm text-slate-800">{c.message}</p>
+                    <p className="text-[11px] text-slate-400">
+                      {c.department} • Firma: <strong className="text-slate-600">{c.signedBy || "Capo Servizio"}</strong> • {c.createdAt}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      return (
+        <div className="min-h-screen w-full px-4 sm:px-6 lg:px-8 py-5">
+          <div className="w-full max-w-[1680px] mx-auto space-y-5">
+            {toast && (
+              <div className="rounded-2xl bg-slate-900 text-white px-5 py-3 text-sm font-medium shadow-lg flex items-center justify-between">
+                <span>{toast}</span>
+                <span className="text-xs text-emerald-300 font-semibold">OK</span>
+              </div>
+            )}
+
+            <header className="bg-white rounded-3xl border border-slate-200 shadow-sm px-5 py-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                {activeSquare ? (
+                  <button
+                    type="button"
+                    onClick={() => setActiveSquareId(null)}
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-2xl cursor-pointer"
+                  >
+                    ← Quadratini Capi Servizio
+                  </button>
+                ) : (
+                  <div className="w-11 h-11 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm">
+                    HS
+                  </div>
+                )}
+
+                <div>
+                  <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+                    {activeSquare ? activeSquare.title : "Hotel Capi Servizio Hub"}
+                  </h1>
+                  <p className="text-xs sm:text-sm text-slate-500">
+                    {activeSquare
+                      ? activeSquare.subtitle
+                      : "Seleziona il quadratino del tuo ruolo o reparto"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                {canViewReport && (
+                  <button
+                    type="button"
+                    onClick={() => setIsReportModalOpen((prev) => !prev)}
+                    className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs sm:text-sm px-4 py-2 rounded-xl transition cursor-pointer"
+                  >
+                    Report Completo &amp; PDF
+                  </button>
+                )}
+                {deferredPrompt && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      deferredPrompt.prompt();
+                      await deferredPrompt.userChoice;
+                      setDeferredPrompt(null);
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3.5 py-2 rounded-xl cursor-pointer"
+                  >
+                    Installa App
+                  </button>
+                )}
+                <label className="text-xs font-bold text-slate-600">Data operativa:</label>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      setSelectedDate(e.target.value);
+                      setSelectedMonth(e.target.value.slice(0, 7));
+                    }
+                  }}
+                  className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs sm:text-sm font-bold text-slate-900"
+                />
+              </div>
+            </header>
+
+            {canViewReport && isReportModalOpen && renderReportPanelContent(false)}
+
+            {!activeSquareId ? (
+              <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
+                {SERVICE_SQUARES.map((sq) => {
+                  let counterBadge = "";
+                  if (sq.id === "capo_ricevimento") {
+                    counterBadge = `Lamentele aperte: ${openComplaintsCount}`;
+                  } else if (sq.id === "lavanderia") {
+                    counterBadge = `Camere pronte: ${data.readyRoomsAlerts.length}`;
+                  } else if (sq.id === "manutenzione") {
+                    const openM = data.maintenances.filter((m) => m.status === "Aperta").length;
+                    counterBadge = `Interventi aperti: ${openM}`;
+                  } else if (sq.id === "personale_contratti") {
+                    counterBadge = `Dipendenti: ${data.staff.length}`;
+                  } else if (sq.id === "storico") {
+                    counterBadge = `Eventi: ${data.history.length}`;
+                  }
+
+                  return (
+                    <button
+                      key={sq.id}
+                      type="button"
+                      onClick={() => setActiveSquareId(sq.id)}
+                      className="group text-left bg-white rounded-3xl border border-slate-200 hover:border-slate-900 shadow-sm hover:shadow-md transition p-5 aspect-square flex flex-col justify-between cursor-pointer"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div
+                          className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${sq.accent} text-white flex items-center justify-center text-2xl shadow-sm`}
+                        >
+                          {sq.icon}
+                        </div>
+                        <span className="text-[11px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full">
+                          {sq.badge}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 my-auto pt-2">
+                        <h2 className="text-lg font-extrabold text-slate-900 group-hover:text-slate-700">
+                          {sq.title}
+                        </h2>
+                        <p className="text-xs text-slate-500 leading-relaxed">{sq.subtitle}</p>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-700">
+                        <span>{counterBadge || "Entra nel reparto"}</span>
+                        <span className="group-hover:translate-x-0.5 transition-transform">→</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </section>
+            ) : isDirectorOrVice ? (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                  <form
+                    onSubmit={submitDirectorNote}
+                    className="lg:col-span-5 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3.5"
+                  >
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900">
+                        Nuova Nota ({actorLabel})
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        Invia avvisi con grado d&apos;importanza e firma dipendente/direzione
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Titolo</label>
+                      <input
+                        type="text"
+                        value={noteForm.title}
+                        onChange={(e) => setNoteForm((p) => ({ ...p, title: e.target.value }))}
+                        placeholder="Es. Controllo turni weekend"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Destinatario</label>
+                        <select
+                          value={noteForm.target}
+                          onChange={(e) => setNoteForm((p) => ({ ...p, target: e.target.value }))}
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        >
+                          <option value="Tutti">Tutti</option>
+                          {DEPARTMENTS.map((d) => (
+                            <option key={d} value={d}>
+                              {d}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Importanza</label>
+                        <select
+                          value={noteForm.importance}
+                          onChange={(e) => setNoteForm((p) => ({ ...p, importance: e.target.value }))}
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        >
+                          {IMPORTANCE_LEVELS.map((lvl) => (
+                            <option key={lvl} value={lvl}>
+                              {lvl}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {renderStaffSignatureSelect(
+                      noteForm.signedBy,
+                      (val) => setNoteForm((p) => ({ ...p, signedBy: val })),
+                      "Firma (chi invia la nota)"
+                    )}
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Messaggio</label>
+                      <textarea
+                        rows={3}
+                        value={noteForm.message}
+                        onChange={(e) => setNoteForm((p) => ({ ...p, message: e.target.value }))}
+                        placeholder="Scrivi la comunicazione per i capi servizio..."
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold text-sm py-2.5 rounded-xl cursor-pointer"
+                    >
+                      Invia Nota
+                    </button>
+                  </form>
+
+                  <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3">
+                    <h3 className="text-base font-bold text-slate-900">Note Inviate dalla Direzione</h3>
+                    {renderNotesBox("Tutti")}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                  {renderReadyRoomsBox(actorLabel)}
+                  {renderComplaintsBox(true)}
+                </div>
+
+                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        Controllo Reparti &amp; Presenze ({actorLabel})
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Passa tra vista giornaliera e vista schematica di tutto il mese
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDirectorPresenceMode("giornaliera")}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer ${
+                          directorPresenceMode === "giornaliera"
+                            ? "bg-slate-900 text-white"
+                            : "bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        Vista Giornaliera
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDirectorPresenceMode("mensile")}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer ${
+                          directorPresenceMode === "mensile"
+                            ? "bg-slate-900 text-white"
+                            : "bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        Vista Schematica Mensile
+                      </button>
+                      <select
+                        value={directorDeptView}
+                        onChange={(e) => setDirectorDeptView(e.target.value)}
+                        className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm font-semibold"
+                      >
+                        <option value="Tutti">Tutti i reparti</option>
+                        {DEPARTMENTS.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {directorPresenceMode === "mensile" ? (
+                    renderMonthlyPresenceSchematic(directorDeptView)
+                  ) : (
+                    <>
+                      {renderAttendanceBlock(
+                        `Presenze Giornalieri — ${directorDeptView}`,
+                        "Stato presenza e motivo assenza obbligatorio su assenze/riposo",
+                        directorDeptView === "Tutti"
+                          ? data.staff
+                          : data.staff.filter((s) => s.department === directorDeptView),
+                        directorDeptView
+                      )}
+                      {renderMaintenanceList(true)}
+                      {renderDeptCommunicationsBox(directorDeptView)}
+                    </>
+                  )}
+                </div>
+              </div>
+            ) : activeSquareId === "capo_ricevimento" ? (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                  <form
+                    onSubmit={saveMeals}
+                    className="lg:col-span-5 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4"
+                  >
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900">
+                        Presenze Ospiti Giornalieri ({selectedDate})
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        Inserisci coperti Colazione, Pranzo e Cena per Sala e Cucina
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Colazione</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={currentMeals.colazione ?? 0}
+                          onChange={(e) => updateMealValue("colazione", e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Pranzo</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={currentMeals.pranzo ?? 0}
+                          onChange={(e) => updateMealValue("pranzo", e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Cena</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={currentMeals.cena ?? 0}
+                          onChange={(e) => updateMealValue("cena", e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full bg-sky-700 hover:bg-sky-800 text-white font-semibold text-sm py-2.5 rounded-xl cursor-pointer"
+                    >
+                      Salva Coperti Ospiti
+                    </button>
+                  </form>
+
+                  <form
+                    onSubmit={submitMaintenanceFromReception}
+                    className="lg:col-span-7 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4"
+                  >
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900">
+                        Invia Manutenzione a Manutenzione
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        Segnala un intervento con firma e tecnico assegnato
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Camera / Area</label>
+                        <input
+                          type="text"
+                          value={maintForm.area}
+                          onChange={(e) => setMaintForm((p) => ({ ...p, area: e.target.value }))}
+                          placeholder="Es. Camera 308"
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Priorità</label>
+                        <select
+                          value={maintForm.priority}
+                          onChange={(e) => setMaintForm((p) => ({ ...p, priority: e.target.value }))}
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        >
+                          {IMPORTANCE_LEVELS.map((lvl) => (
+                            <option key={lvl} value={lvl}>
+                              {lvl}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Descrizione</label>
+                        <input
+                          type="text"
+                          value={maintForm.description}
+                          onChange={(e) => setMaintForm((p) => ({ ...p, description: e.target.value }))}
+                          placeholder="Es. Aria condizionata"
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {renderStaffSignatureSelect(
+                        maintForm.signedBy,
+                        (val) => setMaintForm((p) => ({ ...p, signedBy: val })),
+                        "Firma segnalazione"
+                      )}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                          Tecnico / Esecutore
+                        </label>
+                        <select
+                          value={maintForm.assignedTechnician}
+                          onChange={(e) =>
+                            setMaintForm((p) => ({ ...p, assignedTechnician: e.target.value }))
+                          }
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        >
+                          {data.staff.map((st) => (
+                            <option key={st.id} value={st.name}>
+                              {st.name} ({st.department})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="bg-orange-600 hover:bg-orange-700 text-white font-semibold text-sm px-5 py-2.5 rounded-xl cursor-pointer"
+                    >
+                      Invia a Manutenzione
+                    </button>
+                  </form>
+                </div>
+
+                {renderReadyRoomsBox("Ricevimento")}
+
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                  <form
+                    onSubmit={submitGuestComplaint}
+                    className="lg:col-span-5 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3.5"
+                  >
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        Nuova Lamentela Cliente
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Arriva direttamente a Direttore e Vice Direttore
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Cliente</label>
+                        <input
+                          type="text"
+                          value={complaintForm.guestName}
+                          onChange={(e) =>
+                            setComplaintForm((p) => ({ ...p, guestName: e.target.value }))
+                          }
+                          placeholder="Es. Sig. Bianchi"
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Camera</label>
+                        <input
+                          type="text"
+                          value={complaintForm.room}
+                          onChange={(e) =>
+                            setComplaintForm((p) => ({ ...p, room: e.target.value }))
+                          }
+                          placeholder="Es. 210"
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Ambito</label>
+                        <input
+                          type="text"
+                          value={complaintForm.category}
+                          onChange={(e) =>
+                            setComplaintForm((p) => ({ ...p, category: e.target.value }))
+                          }
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Gravità</label>
+                        <select
+                          value={complaintForm.severity}
+                          onChange={(e) =>
+                            setComplaintForm((p) => ({ ...p, severity: e.target.value }))
+                          }
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                        >
+                          {IMPORTANCE_LEVELS.map((lvl) => (
+                            <option key={lvl} value={lvl}>
+                              {lvl}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {renderStaffSignatureSelect(
+                      complaintForm.signedBy,
+                      (val) => setComplaintForm((p) => ({ ...p, signedBy: val })),
+                      "Firma operatore Ricevimento"
+                    )}
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Dettaglio</label>
+                      <textarea
+                        rows={2}
+                        value={complaintForm.description}
+                        onChange={(e) =>
+                          setComplaintForm((p) => ({ ...p, description: e.target.value }))
+                        }
+                        placeholder="Descrivi la segnalazione del cliente..."
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full bg-rose-700 hover:bg-rose-800 text-white font-semibold text-sm py-2.5 rounded-xl cursor-pointer"
+                    >
+                      Invia a Direttore &amp; Vice Direttore
+                    </button>
+                  </form>
+
+                  <div className="lg:col-span-7">{renderComplaintsBox(false)}</div>
+                </div>
+
+                {renderAttendanceBlock(
+                  "Presenze Giornalieri — Ricevimento",
+                  "Presente, Riposo, Assente ingiustificato, Malattia, Ferie, Infortunio + motivo assenza",
+                  staffByDept.ricevimento,
+                  "Ricevimento"
+                )}
+              </div>
+            ) : activeSquareId === "lavanderia" ? (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                  <form
+                    onSubmit={submitReadyRoomAlert}
+                    className="lg:col-span-5 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3.5"
+                  >
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900">
+                        Segnala Camera Pronta
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        Invia avviso immediato a Ricevimento, Direttore e Vice Direttore
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Camera</label>
+                      <input
+                        type="text"
+                        value={readyRoomForm.room}
+                        onChange={(e) =>
+                          setReadyRoomForm((p) => ({ ...p, room: e.target.value }))
+                        }
+                        placeholder="Es. Camera 205"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+
+                    {renderStaffSignatureSelect(
+                      readyRoomForm.signedBy,
+                      (val) => setReadyRoomForm((p) => ({ ...p, signedBy: val })),
+                      "Firma operatore Lavanderia"
+                    )}
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Note camera</label>
+                      <input
+                        type="text"
+                        value={readyRoomForm.notes}
+                        onChange={(e) =>
+                          setReadyRoomForm((p) => ({ ...p, notes: e.target.value }))
+                        }
+                        placeholder="Es. Biancheria cambiata e controllo completato"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm py-2.5 rounded-xl cursor-pointer"
+                    >
+                      Invia Avviso Camera Pronta
+                    </button>
+                  </form>
+
+                  <div className="lg:col-span-7">{renderReadyRoomsBox(null)}</div>
+                </div>
+
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!maintForm.area.trim() || !maintForm.description.trim()) {
+                      notify("Compila Camera/Area e Descrizione dell'intervento.");
+                      return;
+                    }
+                    const ok = createMaintenanceTicket({
+                      area: maintForm.area,
+                      description: maintForm.description,
+                      priority: maintForm.priority,
+                      fromRole: "Lavanderia",
+                      signedBy: maintForm.signedBy,
+                      assignedTechnician: maintForm.assignedTechnician
+                    });
+                    if (ok) {
+                      setMaintForm({
+                        area: "",
+                        description: "",
+                        priority: "Media",
+                        signedBy: "",
+                        assignedTechnician: techniciansList[0]?.name || "Paolo Mancini"
+                      });
+                      notify("Intervento di Lavanderia inviato a Manutenzione.");
+                    }
+                  }}
+                  className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4"
+                >
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">
+                      Inserisci Intervento (Lavanderia → Manutenzione)
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Segnala guasti o interventi tecnici con firma e esecutore
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Camera / Area</label>
+                      <input
+                        type="text"
+                        value={maintForm.area}
+                        onChange={(e) => setMaintForm((p) => ({ ...p, area: e.target.value }))}
+                        placeholder="Es. Camera 114 / Locale Lavanderia"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Priorità</label>
+                      <select
+                        value={maintForm.priority}
+                        onChange={(e) => setMaintForm((p) => ({ ...p, priority: e.target.value }))}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      >
+                        {IMPORTANCE_LEVELS.map((lvl) => (
+                          <option key={lvl} value={lvl}>
+                            {lvl}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Intervento</label>
+                      <input
+                        type="text"
+                        value={maintForm.description}
+                        onChange={(e) => setMaintForm((p) => ({ ...p, description: e.target.value }))}
+                        placeholder="Es. Controllo scarico / asciugatrice"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {renderStaffSignatureSelect(
+                      maintForm.signedBy,
+                      (val) => setMaintForm((p) => ({ ...p, signedBy: val })),
+                      "Firma intervento"
+                    )}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Tecnico assegnato
+                      </label>
+                      <select
+                        value={maintForm.assignedTechnician}
+                        onChange={(e) =>
+                          setMaintForm((p) => ({ ...p, assignedTechnician: e.target.value }))
+                        }
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      >
+                        {data.staff.map((st) => (
+                          <option key={st.id} value={st.name}>
+                            {st.name} ({st.department})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="bg-orange-600 hover:bg-orange-700 text-white font-semibold text-sm px-5 py-2.5 rounded-xl cursor-pointer"
+                  >
+                    Invia Intervento
+                  </button>
+                </form>
+
+                {renderAttendanceBlock(
+                  "Presenze Giornalieri — Lavanderia",
+                  "Presente, Riposo, Assente ingiustificato, Malattia, Ferie, Infortunio + motivo assenza",
+                  staffByDept.lavanderia,
+                  "Lavanderia"
+                )}
+              </div>
+            ) : activeSquareId === "sala" ? (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-white rounded-3xl border border-slate-200 p-4">
+                    <p className="text-xs font-semibold text-slate-500">Colazione (Ricevimento)</p>
+                    <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.colazione ?? 0}</p>
+                  </div>
+                  <div className="bg-white rounded-3xl border border-slate-200 p-4">
+                    <p className="text-xs font-semibold text-slate-500">Pranzo (Ricevimento)</p>
+                    <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.pranzo ?? 0}</p>
+                  </div>
+                  <div className="bg-white rounded-3xl border border-slate-200 p-4">
+                    <p className="text-xs font-semibold text-slate-500">Cena (Ricevimento)</p>
+                    <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.cena ?? 0}</p>
+                  </div>
+                </div>
+
+                {renderAttendanceBlock(
+                  "Presenze Giornalieri — Sala",
+                  "Presente, Riposo, Assente ingiustificato, Malattia, Ferie, Infortunio + motivo assenza",
+                  staffByDept.sala,
+                  "Sala"
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                  <form
+                    onSubmit={(e) => submitDeptCommunication(e, "Sala")}
+                    className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3"
+                  >
+                    <h3 className="text-base font-bold text-slate-900">Comunicazione Sala</h3>
+                    {renderStaffSignatureSelect(
+                      commForm.signedBy,
+                      (val) => setCommForm((p) => ({ ...p, signedBy: val })),
+                      "Firma comunicazione (Sala)"
+                    )}
+                    <textarea
+                      rows={3}
+                      value={commForm.message}
+                      onChange={(e) => setCommForm((p) => ({ ...p, message: e.target.value }))}
+                      placeholder="Scrivi comunicazione di Sala..."
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm px-4 py-2.5 rounded-xl cursor-pointer"
+                    >
+                      Invia Comunicazione
+                    </button>
+                  </form>
+                  {renderDeptCommunicationsBox("Sala")}
+                </div>
+              </div>
+            ) : activeSquareId === "cucina" ? (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-white rounded-3xl border border-slate-200 p-4">
+                    <p className="text-xs font-semibold text-slate-500">Colazione (Ricevimento)</p>
+                    <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.colazione ?? 0}</p>
+                  </div>
+                  <div className="bg-white rounded-3xl border border-slate-200 p-4">
+                    <p className="text-xs font-semibold text-slate-500">Pranzo (Ricevimento)</p>
+                    <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.pranzo ?? 0}</p>
+                  </div>
+                  <div className="bg-white rounded-3xl border border-slate-200 p-4">
+                    <p className="text-xs font-semibold text-slate-500">Cena (Ricevimento)</p>
+                    <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.cena ?? 0}</p>
+                  </div>
+                </div>
+
+                {renderAttendanceBlock(
+                  "Presenze Giornalieri — Cucina",
+                  "Presente, Riposo, Assente ingiustificato, Malattia, Ferie, Infortunio + motivo assenza",
+                  staffByDept.cucina,
+                  "Cucina"
+                )}
+
+                {renderAttendanceBlock(
+                  "Presenze Giornalieri — Plonge (Gestite da Cucina)",
+                  "Inserimento presenze Plonge a cura della Cucina + motivo assenza",
+                  staffByDept.plonge,
+                  "Plonge"
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                  <form
+                    onSubmit={(e) => submitDeptCommunication(e, "Cucina")}
+                    className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3"
+                  >
+                    <h3 className="text-base font-bold text-slate-900">Comunicazione Cucina</h3>
+                    {renderStaffSignatureSelect(
+                      commForm.signedBy,
+                      (val) => setCommForm((p) => ({ ...p, signedBy: val })),
+                      "Firma comunicazione (Cucina)"
+                    )}
+                    <textarea
+                      rows={3}
+                      value={commForm.message}
+                      onChange={(e) => setCommForm((p) => ({ ...p, message: e.target.value }))}
+                      placeholder="Scrivi comunicazione di Cucina / Plonge..."
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      className="bg-amber-700 hover:bg-amber-800 text-white font-semibold text-sm px-4 py-2.5 rounded-xl cursor-pointer"
+                    >
+                      Invia Comunicazione
+                    </button>
+                  </form>
+                  {renderDeptCommunicationsBox("Cucina")}
+                </div>
+              </div>
+            ) : activeSquareId === "manutenzione" ? (
+              <div className="space-y-6">
+                {renderMaintenanceList(true)}
+                {renderAttendanceBlock(
+                  "Presenze Giornalieri — Manutenzione",
+                  "Presente, Riposo, Assente ingiustificato, Malattia, Ferie, Infortunio + motivo assenza",
+                  staffByDept.manutenzione,
+                  "Manutenzione"
+                )}
+              </div>
+            ) : activeSquareId === "personale_contratti" ? (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                <form
+                  onSubmit={addStaffMember}
+                  className="lg:col-span-5 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3.5"
+                >
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">Nuovo Dipendente</h2>
+                    <p className="text-xs text-slate-500">
+                      Inserisci nome, ruolo, reparto e data di inizio e fine contratto
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Nome e Cognome</label>
+                    <input
+                      type="text"
+                      value={staffForm.name}
+                      onChange={(e) => setStaffForm((p) => ({ ...p, name: e.target.value }))}
+                      placeholder="Es. Matteo Rossi"
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Ruolo</label>
+                      <input
+                        type="text"
+                        value={staffForm.role}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, role: e.target.value }))}
+                        placeholder="Es. Cameriere / Cuoco"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Reparto</label>
+                      <select
+                        value={staffForm.department}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, department: e.target.value }))}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      >
+                        {DEPARTMENTS.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Inizio contratto</label>
+                      <input
+                        type="date"
+                        value={staffForm.contractStart}
+                        onChange={(e) =>
+                          setStaffForm((p) => ({ ...p, contractStart: e.target.value }))
+                        }
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Fine contratto</label>
+                      <input
+                        type="date"
+                        value={staffForm.contractEnd}
+                        onChange={(e) =>
+                          setStaffForm((p) => ({ ...p, contractEnd: e.target.value }))
+                        }
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full bg-violet-700 hover:bg-violet-800 text-white font-semibold text-sm py-2.5 rounded-xl cursor-pointer"
+                  >
+                    Salva Dipendente
+                  </button>
+                </form>
+
+                <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3">
+                  <h3 className="text-base font-bold text-slate-900">
+                    Elenco Personale &amp; Contratti ({data.staff.length})
+                  </h3>
+
+                  <div className="divide-y divide-slate-100">
+                    {data.staff.map((st) => (
+                      <div
+                        key={st.id}
+                        className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                      >
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{st.name}</p>
+                          <p className="text-xs text-slate-500">
+                            {st.role} • <span className="font-semibold text-slate-700">{st.department}</span>
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            Contratto: {st.contractStart} → {st.contractEnd}
+                          </p>
                         </div>
 
-                        <h2 className="text-lg font-bold text-slate-900">{tile.title}</h2>
-                        <p className="text-xs text-slate-500 truncate mt-1">{tile.fileName}</p>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100">
                         <button
                           type="button"
-                          onClick={() => inputRefs.current[tile.id]?.click()}
-                          className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs py-2.5 px-2 rounded-xl cursor-pointer"
+                          onClick={() => removeStaffMember(st.id)}
+                          className="text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-xl self-start sm:self-center cursor-pointer"
                         >
-                          Carica file
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => downloadTileFile(tile)}
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-2.5 px-2 rounded-xl cursor-pointer"
-                        >
-                          Scarica file
-                        </button>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            await openSheetView(tile);
-                            setTimeout(() => window.print(), 200);
-                          }}
-                          className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs py-2.5 px-2 rounded-xl cursor-pointer"
-                        >
-                          Stampa file
+                          Rimuovi
                         </button>
                       </div>
-
-                      <input
-                        ref={(el) => (inputRefs.current[tile.id] = el)}
-                        type="file"
-                        accept=".xlsx"
-                        className="hidden"
-                        onChange={(e) => {
-                          handleUploadFile(tile.id, e.target.files?.[0]);
-                          e.target.value = "";
-                        }}
-                      />
-                    </article>
-                  ))}
-                </section>
-              </>
+                    ))}
+                  </div>
+                </div>
+              </div>
             ) : (
-              <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4">
-                <div className="no-print flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setActiveId(null)}
-                      className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-sm px-4 py-2 rounded-xl cursor-pointer"
-                    >
-                      ← Indietro
-                    </button>
+              <div className="space-y-6">
+                {canViewReport && renderReportPanelContent(true)}
+                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <h2 className="text-xl font-bold text-slate-900">{activeTile.title}</h2>
-                      <p className="text-xs text-slate-500">{activeTile.fileName}</p>
+                      <h2 className="text-lg font-bold text-slate-900">
+                        Storico Generale Attività
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        Cronologia completa di presenze, motivi assenza, coperti, note, camere pronte, lamentele, manutenzioni e contratti
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canViewReport && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => downloadPdfExport("PRESENZE")}
+                            className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl cursor-pointer"
+                          >
+                            PDF Presenze
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => downloadPdfExport("MANUTENZIONI")}
+                            className="bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl cursor-pointer"
+                          >
+                            PDF Manutenzioni
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => downloadPdfExport("COMPLETO")}
+                            className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl cursor-pointer"
+                          >
+                            PDF Report Completo
+                          </button>
+                        </>
+                      )}
+
+                      <select
+                        value={historyFilter}
+                        onChange={(e) => setHistoryFilter(e.target.value)}
+                        className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs sm:text-sm font-semibold"
+                      >
+                        <option value="Tutti">Tutte le categorie</option>
+                        <option value="Presenze">Presenze</option>
+                        <option value="Coperti Ospiti">Coperti Ospiti</option>
+                        <option value="Note Direzione">Note Direzione</option>
+                        <option value="Comunicazioni">Comunicazioni</option>
+                        <option value="Manutenzioni">Manutenzioni</option>
+                        <option value="Camere Pronte">Camere Pronte</option>
+                        <option value="Lamentele Clienti">Lamentele Clienti</option>
+                        <option value="Personale & Contratti">Personale &amp; Contratti</option>
+                      </select>
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-xl px-2 py-1">
-                      <button
-                        type="button"
-                        onClick={() => setZoom((z) => Math.max(60, z - 10))}
-                        className="w-7 h-7 rounded-lg bg-white border border-slate-200 font-bold text-sm cursor-pointer"
+                  <div className="space-y-2.5">
+                    {filteredHistoryRows.map((h) => (
+                      <div
+                        key={h.id}
+                        className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-1"
                       >
-                        −
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setZoom(100)}
-                        className="px-2.5 py-1 text-xs font-bold cursor-pointer"
-                      >
-                        {zoom}%
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setZoom((z) => Math.min(160, z + 10))}
-                        className="w-7 h-7 rounded-lg bg-white border border-slate-200 font-bold text-sm cursor-pointer"
-                      >
-                        +
-                      </button>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => inputRefs.current[activeTile.id]?.click()}
-                      className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer"
-                    >
-                      Carica file
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => downloadTileFile(activeTile)}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer"
-                    >
-                      Scarica file
-                    </button>
-                    <button
-                      type="button"
-                      onClick={printSheet}
-                      className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer"
-                    >
-                      Stampa file
-                    </button>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
+                            {h.type} • {h.department}
+                          </span>
+                          <span className="text-[11px] text-slate-400">{h.createdAt}</span>
+                        </div>
+                        <p className="text-sm font-bold text-slate-900">{h.summary}</p>
+                        {h.detail && <p className="text-xs text-slate-600">{h.detail}</p>}
+                      </div>
+                    ))}
                   </div>
                 </div>
-
-                <input
-                  ref={(el) => (inputRefs.current[activeTile.id] = el)}
-                  type="file"
-                  accept=".xlsx"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const f = e.target.files?.[0];
-                    e.target.value = "";
-                    if (!f) return;
-                    const reader = new FileReader();
-                    reader.onload = async (ev) => {
-                      const bytes = new Uint8Array(ev.target.result);
-                      const wb = new ExcelJS.Workbook();
-                      await wb.xlsx.load(bytes.buffer);
-                      const b64 = uint8ArrayToBase64(bytes);
-                      setTiles((prev) =>
-                        prev.map((t) =>
-                          t.id === activeTile.id
-                            ? { ...t, fileName: f.name, hasFile: true, workbookBase64: b64 }
-                            : t
-                        )
-                      );
-                      await openSheetView({ ...activeTile, fileName: f.name, hasFile: true, workbookBase64: b64 });
-                      showBanner(`Caricato "${f.name}".`);
-                    };
-                    reader.readAsArrayBuffer(f);
-                  }}
-                />
-
-                <div className="print-area overflow-auto max-h-[65vh] border border-slate-200 rounded-2xl bg-slate-50 p-3">
-                  <div
-                    style={{
-                      transform: `scale(${scaleFactor})`,
-                      transformOrigin: "top left",
-                      width: `${100 / scaleFactor}%`
-                    }}
-                  >
-                    <table className="border-collapse bg-white">
-                      <tbody>
-                        {rows.map((row, rIdx) => (
-                          <tr key={rIdx}>
-                            {row.map((cell, cIdx) => (
-                              <td
-                                key={cIdx}
-                                className="border border-slate-200 min-w-[160px] h-9 p-0"
-                              >
-                                <input
-                                  type="text"
-                                  value={cell}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setRows((prev) =>
-                                      prev.map((r, ri) =>
-                                        ri === rIdx ? r.map((c, ci) => (ci === cIdx ? val : c)) : r
-                                      )
-                                    );
-                                  }}
-                                  className={`w-full h-full px-2.5 py-1.5 text-sm bg-transparent focus:outline-none focus:bg-emerald-50/40 ${
-                                    rIdx === 0 ? "font-semibold bg-slate-50" : ""
-                                  }`}
-                                />
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </section>
+              </div>
             )}
           </div>
         </div>
