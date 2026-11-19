@@ -75,7 +75,8 @@
       "Sala",
       "Cucina",
       "Plonge",
-      "Manutenzione"
+      "Manutenzione",
+      "Economato"
     ];
 
     const SERVICE_SQUARES = [
@@ -134,6 +135,14 @@
         badge: "Manutenzione",
         accent: "from-orange-900 to-slate-800",
         icon: "🔧"
+      },
+      {
+        id: "economato",
+        title: "Economato",
+        subtitle: "Comunicazioni del Direttore + inserimento presenze Economato",
+        badge: "Economato",
+        accent: "from-cyan-900 to-slate-800",
+        icon: "📦"
       },
       {
         id: "personale_contratti",
@@ -261,6 +270,14 @@
             department: "Manutenzione",
             contractStart: "2026-01-01",
             contractEnd: "2026-12-31"
+          },
+          {
+            id: "st-10",
+            name: "Chiara Conti",
+            role: "Addetta Economato",
+            department: "Economato",
+            contractStart: "2026-02-01",
+            contractEnd: "2026-12-31"
           }
         ],
         attendanceLogByDate: {
@@ -273,11 +290,20 @@
             "st-6": { status: "Presente", reason: "" },
             "st-7": { status: "Ferie", reason: "Ferie estive/autunnali approvate" },
             "st-8": { status: "Presente", reason: "" },
-            "st-9": { status: "Presente", reason: "" }
+            "st-9": { status: "Presente", reason: "" },
+            "st-10": { status: "Presente", reason: "" }
           }
         },
         mealsByDate: {
           [today]: { colazione: 64, pranzo: 38, cena: 79 }
+        },
+        intolerancesByDate: {
+          [today]: {
+            count: 3,
+            details: "2 celiaci, 1 intollerante al lattosio",
+            signedBy: "Giulia Conti",
+            updatedAt: "19/11/2026, 11:00"
+          }
         },
         directorNotes: [
           {
@@ -289,6 +315,16 @@
             authorRole: "Direttore",
             signedBy: "Direzione Generale",
             createdAt: "19/11/2026, 09:15"
+          },
+          {
+            id: "note-2",
+            title: "Scorte e forniture Economato",
+            message: "Verificare scorte detergenti, monouso e forniture reparto prima del weekend.",
+            target: "Economato",
+            importance: "Media",
+            authorRole: "Direttore",
+            signedBy: "Direzione Generale",
+            createdAt: "19/11/2026, 10:20"
           }
         ],
         deptCommunications: [
@@ -374,6 +410,29 @@
         return createInitialData();
       });
 
+      const [rolePins, setRolePins] = useState(() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && parsed.rolePins && typeof parsed.rolePins === "object") {
+              return { ...parsed.rolePins };
+            }
+          }
+          const standalonePins = localStorage.getItem(`${STORAGE_KEY}_role_pins`);
+          if (standalonePins) {
+            const parsedPins = JSON.parse(standalonePins);
+            if (parsedPins && typeof parsedPins === "object") {
+              return { ...parsedPins };
+            }
+          }
+        } catch (e) {}
+        return {};
+      });
+
+      const [pinConfigFilterDept, setPinConfigFilterDept] = useState("Tutti");
+      const [squarePinAttemptById, setSquarePinAttemptById] = useState({});
+      const [squarePinErrorById, setSquarePinErrorById] = useState({});
       const [activeSquareId, setActiveSquareId] = useState(null);
       const [selectedDate, setSelectedDate] = useState(getTodayIso());
       const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthYm());
@@ -386,7 +445,7 @@
       const [historyFilter, setHistoryFilter] = useState("Tutti");
       const [deferredPrompt, setDeferredPrompt] = useState(null);
 
-      // Stato Report Completo & Filtri PDF
+      // Stato Report Completo & Filtri PDF (visibile solo a Direttore e Vice Direttore)
       const [isReportModalOpen, setIsReportModalOpen] = useState(false);
       const [reportFilters, setReportFilters] = useState({
         dateFrom: "",
@@ -444,11 +503,35 @@
         contractEnd: ""
       });
 
+      const currentIntolerances = data.intolerancesByDate?.[selectedDate] || {
+        count: 0,
+        details: "",
+        signedBy: "",
+        updatedAt: ""
+      };
+
+      const [intoleranceForm, setIntoleranceForm] = useState({
+        count: 0,
+        details: "",
+        signedBy: ""
+      });
+
+      useEffect(() => {
+        const rec = data.intolerancesByDate?.[selectedDate];
+        setIntoleranceForm({
+          count: rec?.count ?? 0,
+          details: rec?.details ?? "",
+          signedBy: rec?.signedBy ?? ""
+        });
+      }, [selectedDate, data.intolerancesByDate]);
+
       useEffect(() => {
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+          const payload = JSON.stringify({ ...data, rolePins });
+          localStorage.setItem(STORAGE_KEY, payload);
+          localStorage.setItem(`${STORAGE_KEY}_role_pins`, JSON.stringify(rolePins));
         } catch (e) {}
-      }, [data]);
+      }, [data, rolePins]);
 
       useEffect(() => {
         const dayMap = data.attendanceLogByDate?.[selectedDate] || {};
@@ -525,7 +608,57 @@
       const isDirectorOrVice =
         activeSquareId === "direttore" || activeSquareId === "vice_direttore";
       const canViewReport = isDirectorOrVice;
+      const canManagePins = isDirectorOrVice;
       const actorLabel = activeSquare ? activeSquare.title : "Capo Servizio";
+
+      const handleUpdateRolePin = (squareId, rawPin) => {
+        const cleanPin = String(rawPin || "")
+          .replace(/\D/g, "")
+          .slice(0, 8);
+        setRolePins((prev) => {
+          const updated = {
+            ...prev,
+            [squareId]: cleanPin
+          };
+          try {
+            localStorage.setItem(`${STORAGE_KEY}_role_pins`, JSON.stringify(updated));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...data, rolePins: updated }));
+          } catch (err) {}
+          return updated;
+        });
+      };
+
+      const handleSavePins = () => {
+        try {
+          localStorage.setItem(`${STORAGE_KEY}_role_pins`, JSON.stringify(rolePins));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...data, rolePins }));
+          notify("PIN dei reparti salvati.");
+        } catch (err) {
+          notify("Errore durante il salvataggio dei PIN.");
+        }
+      };
+
+      const handleEnterSquare = (squareId) => {
+        const sqObj = SERVICE_SQUARES.find((s) => s.id === squareId);
+        const expectedPin = String(rolePins?.[squareId] || "").trim();
+
+        if (!expectedPin) {
+          setSquarePinErrorById((prev) => ({ ...prev, [squareId]: "" }));
+          setActiveSquareId(squareId);
+          return;
+        }
+
+        const enteredPin = String(squarePinAttemptById?.[squareId] || "").trim();
+        if (enteredPin === expectedPin) {
+          setSquarePinErrorById((prev) => ({ ...prev, [squareId]: "" }));
+          setSquarePinAttemptById((prev) => ({ ...prev, [squareId]: "" }));
+          setActiveSquareId(squareId);
+        } else {
+          const errMsg = `PIN errato per ${sqObj ? sqObj.title : "questa schermata"}.`;
+          setSquarePinErrorById((prev) => ({ ...prev, [squareId]: errMsg }));
+          notify(errMsg);
+        }
+      };
 
       useEffect(() => {
         if (!canViewReport && isReportModalOpen) {
@@ -589,6 +722,56 @@
           detail: "Visibile a Sala e Cucina"
         });
         notify(`Coperti del ${selectedDate} salvati e condivisi con Sala e Cucina.`);
+      };
+
+      const saveIntolerancesAlert = (e) => {
+        e.preventDefault();
+        const cleanCount = Math.max(0, parseInt(String(intoleranceForm.count ?? 0), 10) || 0);
+        const cleanDetails = String(intoleranceForm.details || "").trim();
+        const signer = String(intoleranceForm.signedBy || "").trim() || actorLabel;
+        const stamp = nowTimestamp();
+
+        const updatedRecord = {
+          count: cleanCount,
+          details: cleanDetails,
+          signedBy: signer,
+          updatedAt: stamp
+        };
+
+        const summaryText = `Persone intolleranti (${selectedDate}): ${cleanCount}${
+          cleanDetails ? ` — ${cleanDetails}` : ""
+        } (Firma: ${signer})`;
+
+        const directionAlertNote = {
+          id: `note-int-${Date.now()}`,
+          title: `Notifica Ricevimento: ${cleanCount} persone intolleranti`,
+          message: `${summaryText}. Condiviso con Economato, Chef/Cucina e Sala.`,
+          target: "Tutti",
+          importance: cleanCount > 0 ? "Alta" : "Media",
+          authorRole: "Capo Ricevimento",
+          signedBy: signer,
+          createdAt: stamp
+        };
+
+        setData((prev) => ({
+          ...prev,
+          intolerancesByDate: {
+            ...(prev.intolerancesByDate || {}),
+            [selectedDate]: updatedRecord
+          },
+          directorNotes: [directionAlertNote, ...prev.directorNotes]
+        }));
+
+        pushHistory({
+          type: "Intolleranze Ospiti",
+          department: "Ricevimento",
+          summary: summaryText,
+          detail: "Notifica inviata a Economato, Chef/Cucina, Sala, Direttore e Vice Direttore"
+        });
+
+        notify(
+          `Notifica inviata: ${cleanCount} persone intolleranti comunicate a Economato, Chef, Sala, Direttore e Vice Direttore.`
+        );
       };
 
       const setDraftStatus = (personId, newStatus) => {
@@ -987,7 +1170,8 @@
           sala: [],
           cucina: [],
           plonge: [],
-          manutenzione: []
+          manutenzione: [],
+          economato: []
         };
         data.staff.forEach((s) => {
           if (s.department === "Ricevimento") map.ricevimento.push(s);
@@ -996,13 +1180,13 @@
           else if (s.department === "Cucina") map.cucina.push(s);
           else if (s.department === "Plonge") map.plonge.push(s);
           else if (s.department === "Manutenzione") map.manutenzione.push(s);
+          else if (s.department === "Economato") map.economato.push(s);
         });
         return map;
       }, [data.staff]);
 
       const openComplaintsCount = data.guestComplaints.filter((c) => c.status === "Aperta").length;
 
-      // Righe presenze filtrate per Report Completo e PDF
       const filteredAttendanceRows = useMemo(() => {
         const rows = [];
         const logByDate = data.attendanceLogByDate || {};
@@ -1061,7 +1245,6 @@
         return rows;
       }, [data.attendanceLogByDate, data.staff, reportFilters]);
 
-      // Righe manutenzioni filtrate per Report Completo e PDF
       const filteredMaintenanceRows = useMemo(() => {
         return (data.maintenances || []).filter((m) => {
           if (
@@ -1094,7 +1277,6 @@
         });
       }, [data.maintenances, reportFilters]);
 
-      // Storico generale filtrato
       const filteredHistoryRows = useMemo(() => {
         const activeCat =
           reportFilters.historyCategory !== "Tutti"
@@ -2132,10 +2314,13 @@
                 {activeSquare ? (
                   <button
                     type="button"
-                    onClick={() => setActiveSquareId(null)}
+                    onClick={() => {
+                      setActiveSquareId(null);
+                      setIsReportModalOpen(false);
+                    }}
                     className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-2xl cursor-pointer"
                   >
-                    ← Quadratini Capi Servizio
+                    ← Torna ai Reparti
                   </button>
                 ) : (
                   <div className="w-11 h-11 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm">
@@ -2196,55 +2381,158 @@
             {canViewReport && isReportModalOpen && renderReportPanelContent(false)}
 
             {!activeSquareId ? (
-              <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
-                {SERVICE_SQUARES.map((sq) => {
-                  let counterBadge = "";
-                  if (sq.id === "capo_ricevimento") {
-                    counterBadge = `Lamentele aperte: ${openComplaintsCount}`;
-                  } else if (sq.id === "lavanderia") {
-                    counterBadge = `Camere pronte: ${data.readyRoomsAlerts.length}`;
-                  } else if (sq.id === "manutenzione") {
-                    const openM = data.maintenances.filter((m) => m.status === "Aperta").length;
-                    counterBadge = `Interventi aperti: ${openM}`;
-                  } else if (sq.id === "personale_contratti") {
-                    counterBadge = `Dipendenti: ${data.staff.length}`;
-                  } else if (sq.id === "storico") {
-                    counterBadge = `Eventi: ${data.history.length}`;
-                  }
+              <div className="space-y-6">
+                <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
+                  {SERVICE_SQUARES.map((sq) => {
+                    let counterBadge = "";
+                    if (sq.id === "capo_ricevimento") {
+                      counterBadge = `Lamentele aperte: ${openComplaintsCount}`;
+                    } else if (sq.id === "lavanderia") {
+                      counterBadge = `Camere pronte: ${data.readyRoomsAlerts.length}`;
+                    } else if (sq.id === "manutenzione") {
+                      const openM = data.maintenances.filter((m) => m.status === "Aperta").length;
+                      counterBadge = `Interventi aperti: ${openM}`;
+                    } else if (sq.id === "economato") {
+                      counterBadge = `Addetti: ${staffByDept.economato.length}`;
+                    } else if (sq.id === "personale_contratti") {
+                      counterBadge = `Dipendenti: ${data.staff.length}`;
+                    } else if (sq.id === "storico") {
+                      counterBadge = `Eventi: ${data.history.length}`;
+                    }
 
-                  return (
-                    <button
-                      key={sq.id}
-                      type="button"
-                      onClick={() => setActiveSquareId(sq.id)}
-                      className="group text-left bg-white rounded-3xl border border-slate-200 hover:border-slate-900 shadow-sm hover:shadow-md transition p-5 aspect-square flex flex-col justify-between cursor-pointer"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div
-                          className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${sq.accent} text-white flex items-center justify-center text-2xl shadow-sm`}
-                        >
-                          {sq.icon}
+                    const configuredPin = rolePins[sq.id];
+                    const hasPinSet = Boolean(configuredPin && String(configuredPin).trim().length > 0);
+                    const pinAttemptValue = squarePinAttemptById[sq.id] || "";
+                    const pinErrorMsg = squarePinErrorById[sq.id] || "";
+
+                    return (
+                      <div
+                        key={sq.id}
+                        className="group text-left bg-white rounded-3xl border border-slate-200 hover:border-slate-900 shadow-sm hover:shadow-md transition p-5 aspect-square flex flex-col justify-between"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleEnterSquare(sq.id)}
+                            className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${sq.accent} text-white flex items-center justify-center text-2xl shadow-sm cursor-pointer shrink-0`}
+                            title={`Apri ${sq.title}`}
+                          >
+                            {sq.icon}
+                          </button>
+
+                          <div className="flex items-center gap-1.5">
+                            {hasPinSet && (
+                              <span
+                                title="PIN impostato: inserisci il PIN corretto per entrare"
+                                aria-label="PIN impostato"
+                                className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold"
+                              >
+                                🔒
+                              </span>
+                            )}
+                            <span className="text-[11px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full">
+                              {sq.badge}
+                            </span>
+                          </div>
                         </div>
-                        <span className="text-[11px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full">
-                          {sq.badge}
-                        </span>
-                      </div>
 
-                      <div className="space-y-1.5 my-auto pt-2">
-                        <h2 className="text-lg font-extrabold text-slate-900 group-hover:text-slate-700">
-                          {sq.title}
-                        </h2>
-                        <p className="text-xs text-slate-500 leading-relaxed">{sq.subtitle}</p>
-                      </div>
+                        <div
+                          onClick={() => handleEnterSquare(sq.id)}
+                          className="space-y-1.5 my-auto pt-2 cursor-pointer"
+                        >
+                          <h2 className="text-lg font-extrabold text-slate-900 group-hover:text-slate-700">
+                            {sq.title}
+                          </h2>
+                          <p className="text-xs text-slate-500 leading-relaxed">{sq.subtitle}</p>
+                        </div>
 
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-700">
-                        <span>{counterBadge || "Entra nel reparto"}</span>
-                        <span className="group-hover:translate-x-0.5 transition-transform">→</span>
+                        <div className="pt-2 border-t border-slate-100 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <label
+                              htmlFor={`quick-pin-${sq.id}`}
+                              className="text-[11px] font-bold text-slate-600 flex items-center gap-1"
+                            >
+                              <span>{hasPinSet ? "🔒" : "🔑"}</span>
+                              <span>{hasPinSet ? "Verifica PIN" : "PIN"}</span>
+                            </label>
+                            <input
+                              id={`quick-pin-${sq.id}`}
+                              type="password"
+                              inputMode="numeric"
+                              maxLength={8}
+                              value={hasPinSet ? pinAttemptValue : configuredPin || ""}
+                              onChange={(e) => {
+                                const cleanPin = String(e.target.value || "")
+                                  .replace(/\D/g, "")
+                                  .slice(0, 8);
+                                if (hasPinSet) {
+                                  setSquarePinAttemptById((prev) => ({
+                                    ...prev,
+                                    [sq.id]: cleanPin
+                                  }));
+                                  if (squarePinErrorById[sq.id]) {
+                                    setSquarePinErrorById((prev) => ({
+                                      ...prev,
+                                      [sq.id]: ""
+                                    }));
+                                  }
+                                } else {
+                                  setRolePins((prev) => {
+                                    const updated = {
+                                      ...prev,
+                                      [sq.id]: cleanPin
+                                    };
+                                    try {
+                                      localStorage.setItem(
+                                        `${STORAGE_KEY}_role_pins`,
+                                        JSON.stringify(updated)
+                                      );
+                                      localStorage.setItem(
+                                        STORAGE_KEY,
+                                        JSON.stringify({ ...data, rolePins: updated })
+                                      );
+                                    } catch (err) {}
+                                    return updated;
+                                  });
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleEnterSquare(sq.id);
+                                }
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              placeholder={hasPinSet ? "Digita PIN..." : "Imposta PIN..."}
+                              autoComplete="off"
+                              className={`w-28 rounded-xl border px-2.5 py-1 text-xs font-extrabold text-slate-900 tracking-widest ${
+                                pinErrorMsg
+                                  ? "border-rose-500 bg-rose-50 focus:border-rose-600"
+                                  : "border-slate-300 bg-slate-50 focus:bg-white focus:border-slate-900"
+                              }`}
+                            />
+                          </div>
+
+                          {pinErrorMsg && (
+                            <p className="text-[11px] font-bold text-rose-700">
+                              {pinErrorMsg}
+                            </p>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleEnterSquare(sq.id)}
+                            className="w-full flex items-center justify-between text-xs font-bold text-slate-800 hover:text-slate-950 pt-0.5 cursor-pointer"
+                          >
+                            <span>{counterBadge || "Apri schermata"}</span>
+                            <span className="group-hover:translate-x-0.5 transition-transform">→</span>
+                          </button>
+                        </div>
                       </div>
-                    </button>
-                  );
-                })}
-              </section>
+                    );
+                  })}
+                </section>
+              </div>
             ) : isDirectorOrVice ? (
               <div className="space-y-6">
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
@@ -2407,6 +2695,72 @@
                     </>
                   )}
                 </div>
+
+                {canManagePins && (
+                  <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-bold text-slate-900">
+                          Assegna o Modifica PIN Reparti ({actorLabel})
+                        </h3>
+                        <p className="text-xs text-slate-500">
+                          Funzione riservata esclusivamente a Direttore e Vice Direttore
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          value={pinConfigFilterDept}
+                          onChange={(e) => setPinConfigFilterDept(e.target.value)}
+                          className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-800"
+                        >
+                          <option value="Tutti">Tutti i reparti</option>
+                          {DEPARTMENTS.map((d) => (
+                            <option key={d} value={d}>
+                              {d}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={handleSavePins}
+                          className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-xl cursor-pointer"
+                        >
+                          Salva PIN
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {SERVICE_SQUARES.filter((sq) => {
+                        if (pinConfigFilterDept === "Tutti") return true;
+                        return (
+                          sq.badge.toLowerCase().includes(pinConfigFilterDept.toLowerCase()) ||
+                          sq.title.toLowerCase().includes(pinConfigFilterDept.toLowerCase())
+                        );
+                      }).map((sq) => (
+                        <div
+                          key={sq.id}
+                          className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5 flex items-center justify-between gap-3"
+                        >
+                          <div>
+                            <p className="text-sm font-bold text-slate-900">
+                              {sq.icon} {sq.title}
+                            </p>
+                            <p className="text-[11px] text-slate-500">{sq.badge}</p>
+                          </div>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            maxLength={8}
+                            value={rolePins[sq.id] || ""}
+                            onChange={(e) => handleUpdateRolePin(sq.id, e.target.value)}
+                            placeholder="PIN"
+                            className="w-24 rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-extrabold text-slate-900 text-center tracking-widest"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : activeSquareId === "capo_ricevimento" ? (
               <div className="space-y-6">
@@ -2466,285 +2820,86 @@
                   </form>
 
                   <form
-                    onSubmit={submitMaintenanceFromReception}
+                    onSubmit={saveIntolerancesAlert}
                     className="lg:col-span-7 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4"
                   >
-                    <div>
-                      <h2 className="text-lg font-bold text-slate-900">
-                        Invia Manutenzione a Manutenzione
-                      </h2>
-                      <p className="text-xs text-slate-500">
-                        Segnala un intervento con firma e tecnico assegnato
-                      </p>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h2 className="text-lg font-bold text-slate-900">
+                          Comunicazione Persone Intolleranti ({selectedDate})
+                        </h2>
+                        <p className="text-xs text-slate-500">
+                          Invia numero intolleranti a Economato, Chef (Cucina) e Sala con notifica a Direttore e Vice Direttore
+                        </p>
+                      </div>
+                      <span className="text-xs font-extrabold px-3 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+                        Attivi: {currentIntolerances.count ?? 0}
+                      </span>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">Camera / Area</label>
-                        <input
-                          type="text"
-                          value={maintForm.area}
-                          onChange={(e) => setMaintForm((p) => ({ ...p, area: e.target.value }))}
-                          placeholder="Es. Camera 308"
-                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">Priorità</label>
-                        <select
-                          value={maintForm.priority}
-                          onChange={(e) => setMaintForm((p) => ({ ...p, priority: e.target.value }))}
-                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                        >
-                          {IMPORTANCE_LEVELS.map((lvl) => (
-                            <option key={lvl} value={lvl}>
-                              {lvl}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">Descrizione</label>
-                        <input
-                          type="text"
-                          value={maintForm.description}
-                          onChange={(e) => setMaintForm((p) => ({ ...p, description: e.target.value }))}
-                          placeholder="Es. Aria condizionata"
-                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {renderStaffSignatureSelect(
-                        maintForm.signedBy,
-                        (val) => setMaintForm((p) => ({ ...p, signedBy: val })),
-                        "Firma segnalazione"
-                      )}
-                      <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1">
-                          Tecnico / Esecutore
+                          N° Persone Intolleranti
                         </label>
-                        <select
-                          value={maintForm.assignedTechnician}
+                        <input
+                          type="number"
+                          min="0"
+                          value={intoleranceForm.count}
                           onChange={(e) =>
-                            setMaintForm((p) => ({ ...p, assignedTechnician: e.target.value }))
+                            setIntoleranceForm((p) => ({ ...p, count: e.target.value }))
                           }
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                          Dettaglio Intolleranze / Allergie (opzionale)
+                        </label>
+                        <input
+                          type="text"
+                          value={intoleranceForm.details}
+                          onChange={(e) =>
+                            setIntoleranceForm((p) => ({ ...p, details: e.target.value }))
+                          }
+                          placeholder="Es. Celiachia, lattosio, frutta a guscio..."
                           className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                        >
-                          {data.staff.map((st) => (
-                            <option key={st.id} value={st.name}>
-                              {st.name} ({st.department})
-                            </option>
-                          ))}
-                        </select>
+                        />
                       </div>
                     </div>
 
-                    <button
-                      type="submit"
-                      className="bg-orange-600 hover:bg-orange-700 text-white font-semibold text-sm px-5 py-2.5 rounded-xl cursor-pointer"
-                    >
-                      Invia a Manutenzione
-                    </button>
-                  </form>
-                </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                      {renderStaffSignatureSelect(
+                        intoleranceForm.signedBy,
+                        (val) => setIntoleranceForm((p) => ({ ...p, signedBy: val })),
+                        "Firma Ricevimento"
+                      )}
+                      <button
+                        type="submit"
+                        className="w-full bg-amber-700 hover:bg-amber-800 text-white font-semibold text-sm py-2.5 px-4 rounded-xl cursor-pointer"
+                      >
+                        Invia Notifica Intolleranze (Economato, Chef, Sala &amp; Direzione)
+                      </button>
+                    </div>
 
-                {renderReadyRoomsBox("Ricevimento")}
-
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                  <form
-                    onSubmit={submitGuestComplaint}
-                    className="lg:col-span-5 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3.5"
-                  >
-                    <div>
-                      <h3 className="text-base font-bold text-slate-900">
-                        Nuova Lamentela Cliente
-                      </h3>
-                      <p className="text-xs text-slate-500">
-                        Arriva direttamente a Direttore e Vice Direttore
+                    {currentIntolerances.updatedAt && (
+                      <p className="text-[11px] text-slate-500">
+                        Ultimo invio ({currentIntolerances.updatedAt}):{" "}
+                        <strong className="text-slate-800">
+                          {currentIntolerances.count} persone
+                        </strong>
+                        {currentIntolerances.details ? ` • ${currentIntolerances.details}` : ""} • Firma:{" "}
+                        <strong className="text-slate-800">
+                          {currentIntolerances.signedBy || "Ricevimento"}
+                        </strong>
                       </p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">Cliente</label>
-                        <input
-                          type="text"
-                          value={complaintForm.guestName}
-                          onChange={(e) =>
-                            setComplaintForm((p) => ({ ...p, guestName: e.target.value }))
-                          }
-                          placeholder="Es. Sig. Bianchi"
-                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">Camera</label>
-                        <input
-                          type="text"
-                          value={complaintForm.room}
-                          onChange={(e) =>
-                            setComplaintForm((p) => ({ ...p, room: e.target.value }))
-                          }
-                          placeholder="Es. 210"
-                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">Ambito</label>
-                        <input
-                          type="text"
-                          value={complaintForm.category}
-                          onChange={(e) =>
-                            setComplaintForm((p) => ({ ...p, category: e.target.value }))
-                          }
-                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">Gravità</label>
-                        <select
-                          value={complaintForm.severity}
-                          onChange={(e) =>
-                            setComplaintForm((p) => ({ ...p, severity: e.target.value }))
-                          }
-                          className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                        >
-                          {IMPORTANCE_LEVELS.map((lvl) => (
-                            <option key={lvl} value={lvl}>
-                              {lvl}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    {renderStaffSignatureSelect(
-                      complaintForm.signedBy,
-                      (val) => setComplaintForm((p) => ({ ...p, signedBy: val })),
-                      "Firma operatore Ricevimento"
                     )}
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Dettaglio</label>
-                      <textarea
-                        rows={2}
-                        value={complaintForm.description}
-                        onChange={(e) =>
-                          setComplaintForm((p) => ({ ...p, description: e.target.value }))
-                        }
-                        placeholder="Descrivi la segnalazione del cliente..."
-                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="w-full bg-rose-700 hover:bg-rose-800 text-white font-semibold text-sm py-2.5 rounded-xl cursor-pointer"
-                    >
-                      Invia a Direttore &amp; Vice Direttore
-                    </button>
                   </form>
-
-                  <div className="lg:col-span-7">{renderComplaintsBox(false)}</div>
-                </div>
-
-                {renderAttendanceBlock(
-                  "Presenze Giornalieri — Ricevimento",
-                  "Presente, Riposo, Assente ingiustificato, Malattia, Ferie, Infortunio + motivo assenza",
-                  staffByDept.ricevimento,
-                  "Ricevimento"
-                )}
-              </div>
-            ) : activeSquareId === "lavanderia" ? (
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                  <form
-                    onSubmit={submitReadyRoomAlert}
-                    className="lg:col-span-5 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3.5"
-                  >
-                    <div>
-                      <h2 className="text-lg font-bold text-slate-900">
-                        Segnala Camera Pronta
-                      </h2>
-                      <p className="text-xs text-slate-500">
-                        Invia avviso immediato a Ricevimento, Direttore e Vice Direttore
-                      </p>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Camera</label>
-                      <input
-                        type="text"
-                        value={readyRoomForm.room}
-                        onChange={(e) =>
-                          setReadyRoomForm((p) => ({ ...p, room: e.target.value }))
-                        }
-                        placeholder="Es. Camera 205"
-                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                      />
-                    </div>
-
-                    {renderStaffSignatureSelect(
-                      readyRoomForm.signedBy,
-                      (val) => setReadyRoomForm((p) => ({ ...p, signedBy: val })),
-                      "Firma operatore Lavanderia"
-                    )}
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Note camera</label>
-                      <input
-                        type="text"
-                        value={readyRoomForm.notes}
-                        onChange={(e) =>
-                          setReadyRoomForm((p) => ({ ...p, notes: e.target.value }))
-                        }
-                        placeholder="Es. Biancheria cambiata e controllo completato"
-                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm py-2.5 rounded-xl cursor-pointer"
-                    >
-                      Invia Avviso Camera Pronta
-                    </button>
-                  </form>
-
-                  <div className="lg:col-span-7">{renderReadyRoomsBox(null)}</div>
                 </div>
 
                 <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (!maintForm.area.trim() || !maintForm.description.trim()) {
-                      notify("Compila Camera/Area e Descrizione dell'intervento.");
-                      return;
-                    }
-                    const ok = createMaintenanceTicket({
-                      area: maintForm.area,
-                      description: maintForm.description,
-                      priority: maintForm.priority,
-                      fromRole: "Lavanderia",
-                      signedBy: maintForm.signedBy,
-                      assignedTechnician: maintForm.assignedTechnician
-                    });
-                    if (ok) {
-                      setMaintForm({
-                        area: "",
-                        description: "",
-                        priority: "Media",
-                        signedBy: "",
-                        assignedTechnician: techniciansList[0]?.name || "Paolo Mancini"
-                      });
-                      notify("Intervento di Lavanderia inviato a Manutenzione.");
-                    }
-                  }}
+                  onSubmit={submitMaintenanceFromReception}
                   className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4"
                 >
                   <div>
@@ -2836,7 +2991,7 @@
               </div>
             ) : activeSquareId === "sala" ? (
               <div className="space-y-6">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="bg-white rounded-3xl border border-slate-200 p-4">
                     <p className="text-xs font-semibold text-slate-500">Colazione (Ricevimento)</p>
                     <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.colazione ?? 0}</p>
@@ -2848,6 +3003,13 @@
                   <div className="bg-white rounded-3xl border border-slate-200 p-4">
                     <p className="text-xs font-semibold text-slate-500">Cena (Ricevimento)</p>
                     <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.cena ?? 0}</p>
+                  </div>
+                  <div className="bg-amber-50/80 rounded-3xl border border-amber-200 p-4">
+                    <p className="text-xs font-bold text-amber-900">Persone Intolleranti (Ricevimento)</p>
+                    <p className="text-2xl font-black text-amber-950 mt-1">{currentIntolerances.count ?? 0}</p>
+                    {currentIntolerances.details && (
+                      <p className="text-[11px] text-amber-800 mt-0.5 truncate">{currentIntolerances.details}</p>
+                    )}
                   </div>
                 </div>
 
@@ -2888,7 +3050,7 @@
               </div>
             ) : activeSquareId === "cucina" ? (
               <div className="space-y-6">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="bg-white rounded-3xl border border-slate-200 p-4">
                     <p className="text-xs font-semibold text-slate-500">Colazione (Ricevimento)</p>
                     <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.colazione ?? 0}</p>
@@ -2900,6 +3062,13 @@
                   <div className="bg-white rounded-3xl border border-slate-200 p-4">
                     <p className="text-xs font-semibold text-slate-500">Cena (Ricevimento)</p>
                     <p className="text-2xl font-black text-slate-900 mt-1">{currentMeals.cena ?? 0}</p>
+                  </div>
+                  <div className="bg-amber-50/80 rounded-3xl border border-amber-200 p-4">
+                    <p className="text-xs font-bold text-amber-900">Persone Intolleranti (Chef / Cucina)</p>
+                    <p className="text-2xl font-black text-amber-950 mt-1">{currentIntolerances.count ?? 0}</p>
+                    {currentIntolerances.details && (
+                      <p className="text-[11px] text-amber-800 mt-0.5 truncate">{currentIntolerances.details}</p>
+                    )}
                   </div>
                 </div>
 
@@ -2953,6 +3122,48 @@
                   "Presente, Riposo, Assente ingiustificato, Malattia, Ferie, Infortunio + motivo assenza",
                   staffByDept.manutenzione,
                   "Manutenzione"
+                )}
+              </div>
+            ) : activeSquareId === "economato" ? (
+              <div className="space-y-6">
+                <div className="bg-amber-50/80 rounded-3xl border border-amber-200 p-5 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-extrabold uppercase tracking-wider text-amber-900">
+                      Segnalazione Ricevimento ({selectedDate})
+                    </p>
+                    <h2 className="text-lg font-extrabold text-amber-950 mt-0.5">
+                      Persone Intolleranti Comunicate: {currentIntolerances.count ?? 0}
+                    </h2>
+                    {currentIntolerances.details && (
+                      <p className="text-xs text-amber-900 mt-0.5">
+                        Dettaglio: {currentIntolerances.details}
+                      </p>
+                    )}
+                  </div>
+                  {currentIntolerances.updatedAt && (
+                    <span className="text-[11px] font-semibold text-amber-800">
+                      Firma: {currentIntolerances.signedBy || "Ricevimento"} • {currentIntolerances.updatedAt}
+                    </span>
+                  )}
+                </div>
+
+                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-3">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">
+                      Comunicazioni del Direttore (Economato)
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Avvisi e note inviate dalla Direzione all&apos;Economato o a tutti i reparti
+                    </p>
+                  </div>
+                  {renderNotesBox("Economato")}
+                </div>
+
+                {renderAttendanceBlock(
+                  "Presenze Giornalieri — Economato",
+                  "Inserimento presenze Economato + motivo assenza / riposo",
+                  staffByDept.economato,
+                  "Economato"
                 )}
               </div>
             ) : activeSquareId === "personale_contratti" ? (
@@ -3121,6 +3332,7 @@
                         <option value="Tutti">Tutte le categorie</option>
                         <option value="Presenze">Presenze</option>
                         <option value="Coperti Ospiti">Coperti Ospiti</option>
+                        <option value="Intolleranze Ospiti">Intolleranze Ospiti</option>
                         <option value="Note Direzione">Note Direzione</option>
                         <option value="Comunicazioni">Comunicazioni</option>
                         <option value="Manutenzioni">Manutenzioni</option>
