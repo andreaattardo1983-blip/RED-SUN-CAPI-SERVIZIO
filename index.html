@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SCHEDE LAVORO 2027 — RED SUN App Hub</title>
+  <title>Excel Hub — Carica, Scarica e Stampa</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -13,323 +13,68 @@
     body {
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    .sheet-cell-box:focus {
-      outline: 2px solid #059669;
-      outline-offset: -2px;
-      position: relative;
-      z-index: 4;
+    @media print {
+      .no-print {
+        display: none !important;
+      }
+      .print-area {
+        overflow: visible !important;
+        max-height: none !important;
+        border: none !important;
+        padding: 0 !important;
+        background: #ffffff !important;
+      }
     }
   </style>
 </head>
-<body class="bg-gradient-to-br from-slate-100 via-slate-50 to-emerald-50/40 text-slate-900 min-h-screen antialiased">
+<body class="bg-slate-100 text-slate-900 min-h-screen antialiased">
   <div id="root"></div>
 
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    const STORAGE_KEY = "red_sun_2027_hub_v2";
+    const STORAGE_KEY = "excel_hub_carica_scarica_stampa_v1";
 
-    const OFFICE_THEME_COLORS = {
-      0: "#FFFFFF",
-      1: "#0F172A",
-      2: "#E2E8F0",
-      3: "#1E293B",
-      4: "#2563EB",
-      5: "#059669",
-      6: "#475569",
-      7: "#7C3AED",
-      8: "#0891B2",
-      9: "#EA580C"
-    };
-
-    function applyTintToHex(hex, tint) {
-      if (!hex || typeof tint !== "number" || tint === 0) return hex;
-      const clean = hex.replace("#", "");
-      let r = parseInt(clean.slice(0, 2), 16);
-      let g = parseInt(clean.slice(2, 4), 16);
-      let b = parseInt(clean.slice(4, 6), 16);
-
-      if (tint < 0) {
-        const factor = 1 + tint;
-        r = Math.round(r * factor);
-        g = Math.round(g * factor);
-        b = Math.round(b * factor);
-      } else {
-        r = Math.round(r + (255 - r) * tint);
-        g = Math.round(g + (255 - g) * tint);
-        b = Math.round(b + (255 - b) * tint);
-      }
-
-      const toHex = (n) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0");
-      return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-    }
-
-    function excelColorToCss(colorObj, fallback = null) {
-      if (!colorObj) return fallback;
-      if (colorObj.argb) {
-        const hex = String(colorObj.argb).replace(/^#/, "");
-        if (hex.length === 8) {
-          const alpha = hex.slice(0, 2);
-          const rgb = hex.slice(2);
-          if (alpha === "00") return fallback;
-          return applyTintToHex(`#${rgb}`, colorObj.tint);
-        }
-        if (hex.length === 6) return applyTintToHex(`#${hex}`, colorObj.tint);
-      }
-      if (typeof colorObj.theme === "number") {
-        const baseHex = OFFICE_THEME_COLORS[colorObj.theme];
-        if (baseHex) return applyTintToHex(baseHex, colorObj.tint);
-      }
-      return fallback;
-    }
-
-    function borderSideToCss(side) {
-      if (!side || !side.style) return "1px solid #e2e8f0";
-      const color = excelColorToCss(side.color, "#94a3b8");
-      const map = {
-        thin: "1px solid",
-        medium: "2px solid",
-        thick: "3px solid",
-        double: "3px double",
-        dotted: "1px dotted",
-        dashed: "1px dashed",
-        hair: "1px solid"
-      };
-      return `${map[side.style] || "1px solid"} ${color}`;
-    }
-
-    function cellToDisplayValue(cell) {
-      if (!cell || cell.value === null || cell.value === undefined) return "";
-      const v = cell.value;
-      if (typeof v === "object") {
-        if (v.text !== undefined) return String(v.text);
-        if (Array.isArray(v.richText)) return v.richText.map((part) => part.text || "").join("");
-        if (v.result !== undefined && v.result !== null) return String(v.result);
-        if (v.formula) return v.result !== undefined ? String(v.result) : `=${v.formula}`;
-      }
-      return String(v);
-    }
-
-    function extractExcelJsStyle(cell, isFirstRow) {
-      const style = {
-        backgroundColor: isFirstRow ? "#f8fafc" : "#ffffff",
-        color: "#0f172a",
-        fontWeight: isFirstRow ? "600" : "400",
-        fontStyle: "normal",
-        textDecoration: "none",
-        textAlign: "left",
-        verticalAlign: "middle",
-        fontSize: "13px",
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
-        borderTop: "1px solid #e2e8f0",
-        borderRight: "1px solid #e2e8f0",
-        borderBottom: "1px solid #e2e8f0",
-        borderLeft: "1px solid #e2e8f0"
-      };
-
-      if (!cell) return style;
-      if (typeof cell.value === "number") style.textAlign = "right";
-
-      const fill = cell.fill;
-      if (fill && fill.type === "pattern" && fill.pattern && fill.pattern !== "none") {
-        const fg = excelColorToCss(fill.fgColor, null);
-        if (fg) style.backgroundColor = fg;
-      }
-
-      const font = cell.font || {};
-      const fontColor = excelColorToCss(font.color, null);
-      if (fontColor) style.color = fontColor;
-      if (font.bold) style.fontWeight = "700";
-      if (font.italic) style.fontStyle = "italic";
-      if (font.underline) style.textDecoration = "underline";
-      if (font.size) {
-        const px = Math.round(Number(font.size) * 1.33);
-        if (!Number.isNaN(px) && px > 0) {
-          style.fontSize = `${Math.min(28, Math.max(11, px))}px`;
-        }
-      }
-
-      const align = cell.alignment || {};
-      if (align.horizontal && ["left", "center", "right"].includes(align.horizontal)) {
-        style.textAlign = align.horizontal;
-      }
-      if (align.vertical && ["top", "middle", "bottom"].includes(align.vertical)) {
-        style.verticalAlign = align.vertical;
-      }
-
-      const b = cell.border || {};
-      if (b.top && b.top.style) style.borderTop = borderSideToCss(b.top);
-      if (b.right && b.right.style) style.borderRight = borderSideToCss(b.right);
-      if (b.bottom && b.bottom.style) style.borderBottom = borderSideToCss(b.bottom);
-      if (b.left && b.left.style) style.borderLeft = borderSideToCss(b.left);
-
-      return style;
-    }
-
-    function parseMergeRange(rangeStr) {
-      const parts = rangeStr.split(":");
-      if (parts.length !== 2) return null;
-      const parseCoord = (ref) => {
-        const match = ref.match(/^([A-Z]+)(\d+)$/i);
-        if (!match) return null;
-        const colLetters = match[1].toUpperCase();
-        const rowNum = parseInt(match[2], 10) - 1;
-        let colNum = 0;
-        for (let i = 0; i < colLetters.length; i++) {
-          colNum = colNum * 26 + (colLetters.charCodeAt(i) - 64);
-        }
-        return { r: rowNum, c: colNum - 1 };
-      };
-      const s = parseCoord(parts[0]);
-      const e = parseCoord(parts[1]);
-      if (!s || !e) return null;
-      return { s, e };
-    }
-
-    const INITIAL_ITEMS = [
-      {
-        id: "rs-1",
-        title: "Giornaliera",
-        relPath: "RED SUN 2027\\GIORNALIERA RED SUN  2027.xlsx",
-        category: "Operativo",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-2",
-        title: "Budget",
-        relPath: "RED SUN 2027\\BUDGET 2027 RED SUN.xlsx",
-        category: "Amministrazione",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-3",
-        title: "Avanzamento lavori giornaliero",
-        relPath: "RED SUN 2027\\AVANZAMENTO LAVORI GIORNALIERO RED SUN 2026.xlsx",
-        category: "Operativo",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-4",
-        title: "Contratti + Richiesta d'Assunzione",
-        relPath: "RED SUN 2027\\CONTRATTI + RICHIESTA D'ASSUNZIONE RED SUN 2027.xlsx",
-        category: "Personale",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-5",
-        title: "Giornaliera Arminzos",
-        relPath: "RED SUN 2027\\GIORNALIERA ARMINZOS 2027.xlsx",
-        category: "Operativo",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-6",
-        title: "Fatture/ddt",
-        relPath: "RED SUN 2027\\FATTURE 2027 RED SUN.xlsx",
-        category: "Amministrazione",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-7",
-        title: "Presenze Animazione",
-        relPath: "",
-        category: "Personale",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-8",
-        title: "Sistemazione alloggi",
-        relPath: "",
-        category: "Logistica",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-9",
-        title: "Contratti d'appalto",
-        relPath: "",
-        category: "Contratti",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-10",
-        title: "Sidec",
-        relPath: "",
-        category: "Gestione",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-11",
-        title: "Password",
-        relPath: "",
-        category: "Sicurezza",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-12",
-        title: "Formulario Rifiuti",
-        relPath: "",
-        category: "Adempimenti",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-13",
-        title: "Isola Gas",
-        relPath: "",
-        category: "Logistica",
-        hasFile: false,
-        workbookBase64: null
-      },
-      {
-        id: "rs-14",
-        title: "Contratti appartamenti",
-        relPath: "",
-        category: "Contratti",
-        hasFile: false,
-        workbookBase64: null
-      }
+    const INITIAL_TILES = [
+      { id: "t-1", title: "Giornaliera", fileName: "Giornaliera.xlsx", hasFile: false, workbookBase64: null },
+      { id: "t-2", title: "Budget", fileName: "Budget.xlsx", hasFile: false, workbookBase64: null },
+      { id: "t-3", title: "Avanzamento lavori giornaliero", fileName: "Avanzamento_Lavori.xlsx", hasFile: false, workbookBase64: null },
+      { id: "t-4", title: "Contratti + Richiesta d'Assunzione", fileName: "Contratti_Assunzione.xlsx", hasFile: false, workbookBase64: null },
+      { id: "t-5", title: "Giornaliera Arminzos", fileName: "Giornaliera_Arminzos.xlsx", hasFile: false, workbookBase64: null },
+      { id: "t-6", title: "Fatture/ddt", fileName: "Fatture_DDT.xlsx", hasFile: false, workbookBase64: null }
     ];
 
-    async function buildEmptyBase64() {
-      const wb = new ExcelJS.Workbook();
-      const ws = wb.addWorksheet("Foglio1");
-      ws.getRow(1).values = ["Voce", "Note", "Stato", "Aggiornamento"];
-      for (let r = 1; r <= 10; r++) ws.getRow(r).height = 26;
-      ws.columns = [{ width: 24 }, { width: 28 }, { width: 16 }, { width: 18 }];
-      const buf = await wb.xlsx.writeBuffer();
-      const bytes = new Uint8Array(buf);
+    function uint8ArrayToBase64(bytes) {
       let bin = "";
-      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      for (let i = 0; i < bytes.length; i++) {
+        bin += String.fromCharCode(bytes[i]);
+      }
       return btoa(bin);
     }
 
     function base64ToUint8Array(b64) {
-      const binaryString = atob(b64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
       return bytes;
     }
 
-    function uint8ArrayToBase64(bytes) {
-      let bin = "";
-      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-      return btoa(bin);
+    async function buildBlankWorkbookBase64() {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Foglio1");
+      ws.addRow(["Voce", "Dettagli", "Note", "Stato"]);
+      for (let r = 2; r <= 12; r++) {
+        ws.addRow(["", "", "", ""]);
+      }
+      ws.columns = [{ width: 24 }, { width: 28 }, { width: 24 }, { width: 18 }];
+      const buf = await wb.xlsx.writeBuffer();
+      return uint8ArrayToBase64(new Uint8Array(buf));
     }
 
     function App() {
-      const [items, setItems] = useState(() => {
+      const [tiles, setTiles] = useState(() => {
         try {
           const saved = localStorage.getItem(STORAGE_KEY);
           if (saved) {
@@ -337,527 +82,376 @@
             if (Array.isArray(parsed) && parsed.length > 0) return parsed;
           }
         } catch (e) {}
-        return INITIAL_ITEMS;
+        return INITIAL_TILES;
       });
 
-      const [search, setSearch] = useState("");
-      const [onlyLinked, setOnlyLinked] = useState(false);
       const [activeId, setActiveId] = useState(null);
-      const [sheetZoom, setSheetZoom] = useState(100);
-      const [sheetNames, setSheetNames] = useState([]);
-      const [currentSheet, setCurrentSheet] = useState("");
-      const [gridData, setGridData] = useState([]);
-      const [cellStyles, setCellStyles] = useState([]);
-      const [merges, setMerges] = useState([]);
-      const [colWidths, setColWidths] = useState([]);
-      const [rowHeights, setRowHeights] = useState([]);
-      const [copiedBoxPath, setCopiedBoxPath] = useState("");
-      const [statusMsg, setStatusMsg] = useState("");
-      const fileInputRefs = useRef({});
+      const [zoom, setZoom] = useState(100);
+      const [rows, setRows] = useState([]);
+      const [message, setMessage] = useState("");
+      const inputRefs = useRef({});
 
       useEffect(() => {
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles));
         } catch (e) {}
-      }, [items]);
+      }, [tiles]);
 
-      const notify = (msg) => {
-        setStatusMsg(msg);
-        setTimeout(() => setStatusMsg((p) => (p === msg ? "" : p)), 3500);
+      const showBanner = (text) => {
+        setMessage(text);
+        setTimeout(() => {
+          setMessage((prev) => (prev === text ? "" : prev));
+        }, 3000);
       };
 
-      const copyPath = async (relPath, title) => {
-        if (!relPath) {
-          notify(`Nessun percorso impostato per "${title}".`);
-          return;
-        }
-        setCopiedBoxPath(relPath);
-        try {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(relPath);
-            notify(`Copiato negli appunti: ${relPath}`);
-            return;
+      const addTile = () => {
+        const n = tiles.length + 1;
+        setTiles((prev) => [
+          ...prev,
+          {
+            id: `t-${Date.now()}`,
+            title: `Scheda ${n}`,
+            fileName: `Scheda_${n}.xlsx`,
+            hasFile: false,
+            workbookBase64: null
           }
-        } catch (e) {}
-
-        try {
-          const ta = document.createElement("textarea");
-          ta.value = relPath;
-          ta.style.position = "fixed";
-          ta.style.opacity = "0";
-          document.body.appendChild(ta);
-          ta.focus();
-          ta.select();
-          document.execCommand("copy");
-          document.body.removeChild(ta);
-          notify(`Copiato: ${relPath}`);
-        } catch (e2) {
-          notify("Percorso pronto nella barra in alto: premi Ctrl+C per copiarlo.");
-        }
+        ]);
+        showBanner("Nuovo riquadro aggiunto.");
       };
 
-      const downloadBatLauncher = (item) => {
-        const safeName =
-          item.title
-            .replace(/[\\/:*?"<>|]+/g, "_")
-            .replace(/\s+/g, "_") || "Scheda";
-        const target = item.relPath ? item.relPath : `${safeName}.xlsx`;
-        const batContent = [
-          "@echo off",
-          "chcp 65001 >nul",
-          `start "" "${target}"`,
-          "exit"
-        ].join("\r\n");
-
-        const blob = new Blob([batContent], { type: "application/bat;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `Avvia_${safeName}.bat`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        notify(`Creato comando "Avvia_${safeName}.bat" (mettilo nella cartella principale e fai doppio clic).`);
-      };
-
-      const handleFileUpload = async (id, file) => {
+      const handleUploadFile = (tileId, file) => {
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = async (e) => {
+        reader.onload = async (ev) => {
           try {
-            const bytes = new Uint8Array(e.target.result);
+            const bytes = new Uint8Array(ev.target.result);
             const wb = new ExcelJS.Workbook();
             await wb.xlsx.load(bytes.buffer);
             const b64 = uint8ArrayToBase64(bytes);
 
-            setItems((prev) =>
-              prev.map((it) =>
-                it.id === id
+            setTiles((prev) =>
+              prev.map((t) =>
+                t.id === tileId
                   ? {
-                      ...it,
+                      ...t,
+                      fileName: file.name,
                       hasFile: true,
-                      workbookBase64: b64,
-                      relPath: it.relPath || `RED SUN 2027\\${file.name}`
+                      workbookBase64: b64
                     }
-                  : it
+                  : t
               )
             );
-            notify(`Caricato "${file.name}" — clicca Anteprima per vederlo.`);
+            showBanner(`File "${file.name}" caricato.`);
           } catch (err) {
-            notify("Impossibile leggere il file: usa un file .xlsx valido.");
+            showBanner("Errore nella lettura del file .xlsx.");
           }
         };
         reader.readAsArrayBuffer(file);
       };
 
-      const loadSheetFromBase64 = async (b64, targetSheet = null) => {
-        const wb = new ExcelJS.Workbook();
-        await wb.xlsx.load(base64ToUint8Array(b64).buffer);
-        const names = wb.worksheets.map((ws) => ws.name);
-        const chosen = targetSheet && names.includes(targetSheet) ? targetSheet : names[0] || "Foglio1";
-        const ws = wb.getWorksheet(chosen) || wb.worksheets[0];
-
-        const maxRows = Math.max(10, ws.rowCount || 10);
-        const maxCols = Math.max(4, ws.columnCount || 4);
-
-        const normalized = [];
-        const stylesMatrix = [];
-        const rowsInfo = [];
-
-        for (let r = 1; r <= maxRows; r++) {
-          const row = ws.getRow(r);
-          const rowVals = [];
-          const rowSts = [];
-          rowsInfo.push(Math.max(30, Math.min(120, (row.height || 22) * 1.4)));
-
-          for (let c = 1; c <= maxCols; c++) {
-            const cell = row.getCell(c);
-            rowVals.push(cellToDisplayValue(cell));
-            rowSts.push(extractExcelJsStyle(cell, r === 1));
+      const downloadTileFile = async (tile) => {
+        try {
+          let b64 = tile.workbookBase64;
+          if (tile.id === activeId && rows.length > 0) {
+            const wb = new ExcelJS.Workbook();
+            if (b64) {
+              await wb.xlsx.load(base64ToUint8Array(b64).buffer);
+            }
+            const ws = wb.worksheets[0] || wb.addWorksheet("Foglio1");
+            ws.spliceRows(1, ws.rowCount);
+            rows.forEach((r) => ws.addRow(r));
+            const buf = await wb.xlsx.writeBuffer();
+            b64 = uint8ArrayToBase64(new Uint8Array(buf));
+            setTiles((prev) =>
+              prev.map((t) => (t.id === tile.id ? { ...t, hasFile: true, workbookBase64: b64 } : t))
+            );
           }
-          normalized.push(rowVals);
-          stylesMatrix.push(rowSts);
-        }
 
-        const colsInfo = Array.from({ length: maxCols }, (_, idx) => {
-          const col = ws.getColumn(idx + 1);
-          return Math.max(120, Math.min(400, ((col && col.width) || 18) * 9.5));
-        });
+          if (!b64) {
+            b64 = await buildBlankWorkbookBase64();
+          }
 
-        const parsedMerges = [];
-        if (ws._merges) {
-          Object.keys(ws._merges).forEach((rangeStr) => {
-            const parsed = parseMergeRange(rangeStr);
-            if (parsed) parsedMerges.push(parsed);
+          const bytes = base64ToUint8Array(b64);
+          const blob = new Blob([bytes], {
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = tile.fileName || `${tile.title}.xlsx`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          showBanner(`Scaricato "${tile.fileName || `${tile.title}.xlsx`}".`);
+        } catch (err) {
+          showBanner("Impossibile scaricare il file.");
         }
-
-        setSheetNames(names.length ? names : ["Foglio1"]);
-        setCurrentSheet(chosen);
-        setGridData(normalized);
-        setCellStyles(stylesMatrix);
-        setMerges(parsedMerges);
-        setColWidths(colsInfo);
-        setRowHeights(rowsInfo);
       };
 
-      const openPreview = async (item) => {
-        setActiveId(item.id);
-        setSheetZoom(100);
-        const b64 = item.workbookBase64 || (await buildEmptyBase64());
-        await loadSheetFromBase64(b64);
-      };
+      const openSheetView = async (tile) => {
+        setActiveId(tile.id);
+        setZoom(100);
+        const wb = new ExcelJS.Workbook();
+        const b64 = tile.workbookBase64 || (await buildBlankWorkbookBase64());
+        await wb.xlsx.load(base64ToUint8Array(b64).buffer);
+        const ws = wb.worksheets[0];
 
-      const getMergeSpan = (rIdx, cIdx) => {
-        if (!merges || merges.length === 0) return { rowSpan: 1, colSpan: 1, hidden: false };
-        for (const m of merges) {
-          const { s, e } = m;
-          if (rIdx === s.r && cIdx === s.c) {
-            return { rowSpan: e.r - s.r + 1, colSpan: e.c - s.c + 1, hidden: false };
+        const maxR = Math.max(12, ws.rowCount || 12);
+        const maxC = Math.max(4, ws.columnCount || 4);
+        const matrix = [];
+
+        for (let r = 1; r <= maxR; r++) {
+          const rowVals = [];
+          for (let c = 1; c <= maxC; c++) {
+            const v = ws.getRow(r).getCell(c).value;
+            if (v === null || v === undefined) {
+              rowVals.push("");
+            } else if (typeof v === "object") {
+              rowVals.push(String(v.result ?? v.text ?? ""));
+            } else {
+              rowVals.push(String(v));
+            }
           }
-          if (rIdx >= s.r && rIdx <= e.r && cIdx >= s.c && cIdx <= e.c) {
-            return { rowSpan: 1, colSpan: 1, hidden: true };
-          }
+          matrix.push(rowVals);
         }
-        return { rowSpan: 1, colSpan: 1, hidden: false };
+        setRows(matrix);
       };
 
-      const addNewCard = () => {
-        const idx = items.length + 1;
-        setItems((prev) => [
-          ...prev,
-          {
-            id: `rs-${Date.now()}`,
-            title: `Nuova Scheda ${idx}`,
-            relPath: "",
-            category: "Gestione",
-            hasFile: false,
-            workbookBase64: null
-          }
-        ]);
-        notify("Nuova scheda aggiunta.");
+      const printSheet = () => {
+        window.print();
       };
 
-      const resetDefaults = () => {
-        setItems(INITIAL_ITEMS);
-        localStorage.removeItem(STORAGE_KEY);
-        notify("Ripristinate le 14 schede RED SUN 2027.");
-      };
-
-      const filtered = items.filter((it) => {
-        const q = search.trim().toLowerCase();
-        const matchText =
-          !q ||
-          it.title.toLowerCase().includes(q) ||
-          (it.relPath && it.relPath.toLowerCase().includes(q)) ||
-          (it.category && it.category.toLowerCase().includes(q));
-        const matchLink = !onlyLinked || Boolean(it.relPath);
-        return matchText && matchLink;
-      });
-
-      const activeItem = items.find((i) => i.id === activeId) || null;
-      const linkedCount = items.filter((i) => Boolean(i.relPath)).length;
+      const activeTile = tiles.find((t) => t.id === activeId) || null;
+      const scaleFactor = zoom / 100;
 
       return (
         <div className="min-h-screen w-full px-4 sm:px-6 lg:px-8 py-6">
           <div className="w-full max-w-[1640px] mx-auto space-y-6">
-            {statusMsg && (
-              <div className="rounded-2xl bg-slate-900 text-white px-5 py-3 text-sm font-medium shadow-lg flex items-center justify-between">
-                <span>{statusMsg}</span>
-                <span className="text-xs text-emerald-300 font-semibold">OK</span>
+            {message && (
+              <div className="no-print rounded-2xl bg-slate-900 text-white px-5 py-3 text-sm font-medium shadow">
+                {message}
               </div>
             )}
 
-            {copiedBoxPath && (
-              <div className="rounded-2xl bg-white border border-emerald-300 px-5 py-3 shadow-xs flex flex-wrap items-center justify-between gap-3">
-                <div className="text-xs text-slate-600">
-                  <span className="font-semibold text-emerald-700">Percorso selezionato:</span>{" "}
-                  <code className="bg-slate-100 px-2 py-1 rounded text-slate-900">{copiedBoxPath}</code>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setCopiedBoxPath("")}
-                  className="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
-                >
-                  Chiudi
-                </button>
-              </div>
-            )}
-
-            {!activeItem ? (
+            {!activeTile ? (
               <>
-                <header className="bg-white/95 backdrop-blur rounded-3xl border border-slate-200/80 shadow-sm px-6 py-5 flex flex-wrap items-center justify-between gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white flex items-center justify-center font-bold text-base shadow-md shadow-emerald-600/20">
-                      RS27
-                    </div>
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-                          SCHEDE LAVORO 2027 — RED SUN
-                        </h1>
-                        <span className="text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-                          {linkedCount} con link file
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-500 mt-0.5">
-                        Genera il comando rapido (.bat) per aprire il singolo file sul PC, copia il percorso o apri l'anteprima
-                      </p>
-                    </div>
+                <header className="no-print bg-white rounded-3xl border border-slate-200 shadow-sm px-6 py-5 flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <h1 className="text-2xl font-bold text-slate-900">Excel Hub</h1>
+                    <p className="text-sm text-slate-500">
+                      Carica file, scarica file e stampa file — vista orizzontale
+                    </p>
                   </div>
-
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <button
-                      type="button"
-                      onClick={addNewCard}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm px-4 py-2.5 rounded-2xl transition cursor-pointer"
-                    >
-                      + Nuova Scheda
-                    </button>
-                    <button
-                      type="button"
-                      onClick={resetDefaults}
-                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs px-3.5 py-2.5 rounded-2xl transition cursor-pointer"
-                    >
-                      Ripristina elenco
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={addTile}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm px-4 py-2.5 rounded-2xl transition cursor-pointer"
+                  >
+                    + Riquadro
+                  </button>
                 </header>
 
-                <div className="bg-white/90 rounded-2xl border border-slate-200/80 p-4 flex flex-wrap items-center justify-between gap-3">
-                  <input
-                    type="text"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Cerca scheda (es. Giornaliera, Budget, Fatture, Arminzos, Password...)"
-                    className="flex-1 min-w-[240px] bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-emerald-500"
-                  />
-                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={onlyLinked}
-                      onChange={(e) => setOnlyLinked(e.target.checked)}
-                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                    />
-                    Solo schede con link file
-                  </label>
-                </div>
-
-                <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                  {filtered.map((item) => (
+                <section className="no-print grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                  {tiles.map((tile) => (
                     <article
-                      key={item.id}
-                      className="bg-white rounded-3xl border border-slate-200/80 shadow-sm hover:shadow-md hover:border-emerald-300 transition p-5 flex flex-col justify-between gap-4"
+                      key={tile.id}
+                      className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 flex flex-col justify-between gap-4"
                     >
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] font-semibold uppercase tracking-wider bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">
-                            {item.category || "Scheda"}
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <span
+                            className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                              tile.hasFile
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                : "bg-slate-100 text-slate-500"
+                            }`}
+                          >
+                            {tile.hasFile ? "File caricato" : "Vuoto"}
                           </span>
-                          {item.hasFile ? (
-                            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-                              File caricato
-                            </span>
-                          ) : item.relPath ? (
-                            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-                              Link attivo
-                            </span>
-                          ) : (
-                            <span className="text-xs font-medium text-slate-400 bg-slate-50 border border-slate-200 px-2.5 py-0.5 rounded-full">
-                              Senza link
-                            </span>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => openSheetView(tile)}
+                            className="text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 px-3 py-1 rounded-xl cursor-pointer"
+                          >
+                            Apri
+                          </button>
                         </div>
 
-                        <h2 className="text-lg font-bold text-slate-900 pt-1">{item.title}</h2>
-
-                        <p className="text-xs text-slate-500 break-all bg-slate-50 border border-slate-200/70 rounded-xl p-2.5 min-h-[44px]">
-                          {item.relPath ? item.relPath : "Nessun file Excel collegato in questo riquadro"}
-                        </p>
+                        <h2 className="text-lg font-bold text-slate-900">{tile.title}</h2>
+                        <p className="text-xs text-slate-500 truncate mt-1">{tile.fileName}</p>
                       </div>
 
-                      <div className="space-y-2 pt-1">
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => downloadBatLauncher(item)}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-2.5 px-3 rounded-xl transition cursor-pointer"
-                          >
-                            Crea Comando (.bat)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => copyPath(item.relPath, item.title)}
-                            className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs py-2.5 px-3 rounded-xl transition cursor-pointer"
-                          >
-                            Copia percorso
-                          </button>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => openPreview(item)}
-                            className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs py-2 px-3 rounded-xl transition cursor-pointer"
-                          >
-                            Anteprima
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => fileInputRefs.current[item.id]?.click()}
-                            className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs py-2 px-3 rounded-xl transition cursor-pointer"
-                          >
-                            ↑ Carica .xlsx
-                          </button>
-                        </div>
-
-                        <input
-                          ref={(el) => (fileInputRefs.current[item.id] = el)}
-                          type="file"
-                          accept=".xlsx"
-                          className="hidden"
-                          onChange={(e) => {
-                            handleFileUpload(item.id, e.target.files?.[0]);
-                            e.target.value = "";
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => inputRefs.current[tile.id]?.click()}
+                          className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs py-2.5 px-2 rounded-xl cursor-pointer"
+                        >
+                          Carica file
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => downloadTileFile(tile)}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-2.5 px-2 rounded-xl cursor-pointer"
+                        >
+                          Scarica file
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await openSheetView(tile);
+                            setTimeout(() => window.print(), 200);
                           }}
-                        />
+                          className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs py-2.5 px-2 rounded-xl cursor-pointer"
+                        >
+                          Stampa file
+                        </button>
                       </div>
+
+                      <input
+                        ref={(el) => (inputRefs.current[tile.id] = el)}
+                        type="file"
+                        accept=".xlsx"
+                        className="hidden"
+                        onChange={(e) => {
+                          handleUploadFile(tile.id, e.target.files?.[0]);
+                          e.target.value = "";
+                        }}
+                      />
                     </article>
                   ))}
                 </section>
               </>
             ) : (
-              <section className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-5 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
+              <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4">
+                <div className="no-print flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
                       onClick={() => setActiveId(null)}
                       className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-sm px-4 py-2 rounded-xl cursor-pointer"
                     >
-                      ← Schede
+                      ← Indietro
                     </button>
                     <div>
-                      <h2 className="text-xl font-bold text-slate-900">{activeItem.title}</h2>
-                      <p className="text-xs text-slate-500">{activeItem.relPath || "Anteprima foglio"}</p>
+                      <h2 className="text-xl font-bold text-slate-900">{activeTile.title}</h2>
+                      <p className="text-xs text-slate-500">{activeTile.fileName}</p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-xl px-2 py-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-xl px-2 py-1">
+                      <button
+                        type="button"
+                        onClick={() => setZoom((z) => Math.max(60, z - 10))}
+                        className="w-7 h-7 rounded-lg bg-white border border-slate-200 font-bold text-sm cursor-pointer"
+                      >
+                        −
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setZoom(100)}
+                        className="px-2.5 py-1 text-xs font-bold cursor-pointer"
+                      >
+                        {zoom}%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setZoom((z) => Math.min(160, z + 10))}
+                        className="w-7 h-7 rounded-lg bg-white border border-slate-200 font-bold text-sm cursor-pointer"
+                      >
+                        +
+                      </button>
+                    </div>
+
                     <button
                       type="button"
-                      onClick={() => setSheetZoom((z) => Math.max(60, z - 10))}
-                      className="w-7 h-7 rounded-lg bg-white border border-slate-200 font-bold text-sm cursor-pointer"
+                      onClick={() => inputRefs.current[activeTile.id]?.click()}
+                      className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer"
                     >
-                      −
+                      Carica file
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSheetZoom(100)}
-                      className="px-2.5 py-1 text-xs font-bold cursor-pointer"
+                      onClick={() => downloadTileFile(activeTile)}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer"
                     >
-                      {sheetZoom}%
+                      Scarica file
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSheetZoom((z) => Math.min(160, z + 10))}
-                      className="w-7 h-7 rounded-lg bg-white border border-slate-200 font-bold text-sm cursor-pointer"
+                      onClick={printSheet}
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer"
                     >
-                      +
+                      Stampa file
                     </button>
                   </div>
                 </div>
 
-                {sheetNames.length > 1 && (
-                  <div className="flex flex-wrap gap-2">
-                    {sheetNames.map((name) => (
-                      <button
-                        key={name}
-                        type="button"
-                        onClick={async () => {
-                          if (activeItem.workbookBase64) {
-                            await loadSheetFromBase64(activeItem.workbookBase64, name);
-                          }
-                        }}
-                        className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer ${
-                          name === currentSheet
-                            ? "bg-slate-900 text-white"
-                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                        }`}
-                      >
-                        {name}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <input
+                  ref={(el) => (inputRefs.current[activeTile.id] = el)}
+                  type="file"
+                  accept=".xlsx"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!f) return;
+                    const reader = new FileReader();
+                    reader.onload = async (ev) => {
+                      const bytes = new Uint8Array(ev.target.result);
+                      const wb = new ExcelJS.Workbook();
+                      await wb.xlsx.load(bytes.buffer);
+                      const b64 = uint8ArrayToBase64(bytes);
+                      setTiles((prev) =>
+                        prev.map((t) =>
+                          t.id === activeTile.id
+                            ? { ...t, fileName: f.name, hasFile: true, workbookBase64: b64 }
+                            : t
+                        )
+                      );
+                      await openSheetView({ ...activeTile, fileName: f.name, hasFile: true, workbookBase64: b64 });
+                      showBanner(`Caricato "${f.name}".`);
+                    };
+                    reader.readAsArrayBuffer(f);
+                  }}
+                />
 
-                <div className="overflow-auto max-h-[65vh] border border-slate-200 rounded-2xl bg-slate-50 p-3">
+                <div className="print-area overflow-auto max-h-[65vh] border border-slate-200 rounded-2xl bg-slate-50 p-3">
                   <div
                     style={{
-                      transform: `scale(${sheetZoom / 100})`,
+                      transform: `scale(${scaleFactor})`,
                       transformOrigin: "top left",
-                      width: `${100 / (sheetZoom / 100)}%`
+                      width: `${100 / scaleFactor}%`
                     }}
                   >
                     <table className="border-collapse bg-white">
                       <tbody>
-                        {gridData.map((row, rIdx) => (
-                          <tr key={rIdx} style={{ height: `${rowHeights[rIdx] || 32}px` }}>
-                            {row.map((cell, cIdx) => {
-                              const span = getMergeSpan(rIdx, cIdx);
-                              if (span.hidden) return null;
-                              const visual =
-                                (cellStyles[rIdx] && cellStyles[rIdx][cIdx]) ||
-                                extractExcelJsStyle(null, rIdx === 0);
-                              const totalWidth = Array.from({ length: span.colSpan }, (_, k) =>
-                                colWidths[cIdx + k] || 135
-                              ).reduce((a, b) => a + b, 0);
-
-                              return (
-                                <td
-                                  key={cIdx}
-                                  rowSpan={span.rowSpan}
-                                  colSpan={span.colSpan}
-                                  style={{
-                                    width: `${totalWidth}px`,
-                                    minWidth: `${totalWidth}px`,
-                                    backgroundColor: visual.backgroundColor,
-                                    borderTop: visual.borderTop,
-                                    borderRight: visual.borderRight,
-                                    borderBottom: visual.borderBottom,
-                                    borderLeft: visual.borderLeft,
-                                    verticalAlign: visual.verticalAlign,
-                                    padding: 0
+                        {rows.map((row, rIdx) => (
+                          <tr key={rIdx}>
+                            {row.map((cell, cIdx) => (
+                              <td
+                                key={cIdx}
+                                className="border border-slate-200 min-w-[160px] h-9 p-0"
+                              >
+                                <input
+                                  type="text"
+                                  value={cell}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setRows((prev) =>
+                                      prev.map((r, ri) =>
+                                        ri === rIdx ? r.map((c, ci) => (ci === cIdx ? val : c)) : r
+                                      )
+                                    );
                                   }}
-                                >
-                                  <textarea
-                                    rows={1}
-                                    value={cell}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setGridData((prev) =>
-                                        prev.map((r, ri) =>
-                                          ri === rIdx ? r.map((c, ci) => (ci === cIdx ? val : c)) : r
-                                        )
-                                      );
-                                    }}
-                                    style={{
-                                      backgroundColor: "transparent",
-                                      color: visual.color,
-                                      fontWeight: visual.fontWeight,
-                                      fontStyle: visual.fontStyle,
-                                      textDecoration: visual.textDecoration,
-                                      textAlign: visual.textAlign,
-                                      fontSize: visual.fontSize,
-                                      whiteSpace: visual.whiteSpace,
-                                      wordBreak: visual.wordBreak
-                                    }}
-                                    className="sheet-cell-box w-full h-full px-2.5 py-1.5 resize-none leading-snug"
-                                  />
-                                </td>
-                              );
-                            })}
+                                  className={`w-full h-full px-2.5 py-1.5 text-sm bg-transparent focus:outline-none focus:bg-emerald-50/40 ${
+                                    rIdx === 0 ? "font-semibold bg-slate-50" : ""
+                                  }`}
+                                />
+                              </td>
+                            ))}
                           </tr>
                         ))}
                       </tbody>
