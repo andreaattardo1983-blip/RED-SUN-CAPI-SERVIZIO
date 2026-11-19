@@ -1,1 +1,780 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Excel App Hub</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-200/80 text-slate-900 antialiased">
+  <div id="root"></div>
 
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    const STORAGE_KEY = "excel_app_hub_layout_v2";
+    const DEFAULT_EXPORT_FOLDER_NAME = "Excel_Aggiornati";
+
+    function sanitizeExcelFileName(rawName, fallback = "Foglio_Aggiornato") {
+      const cleaned = (rawName || "")
+        .replace(/\.[^/.]+$/, "")
+        .replace(/[\\/:*?"<>|]+/g, "_")
+        .trim();
+      return `${cleaned || fallback}.xlsx`;
+    }
+
+    function buildWorkbookFromSheets(sheetsMap, metaMap = {}) {
+      const wb = XLSX.utils.book_new();
+      Object.entries(sheetsMap).forEach(([sheetName, rows]) => {
+        const safeRows = Array.isArray(rows) && rows.length > 0 ? rows : [[""]];
+        const ws = XLSX.utils.aoa_to_sheet(safeRows);
+        const meta = metaMap[sheetName] || {};
+        if (Array.isArray(meta.merges) && meta.merges.length > 0) {
+          ws["!merges"] = meta.merges;
+        }
+        if (Array.isArray(meta.cols) && meta.cols.length > 0) {
+          ws["!cols"] = meta.cols;
+        }
+        if (Array.isArray(meta.rows) && meta.rows.length > 0) {
+          ws["!rows"] = meta.rows;
+        }
+        XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31) || "Foglio1");
+      });
+      return wb;
+    }
+
+    function parseWorkbookToPayload(workbook) {
+      const sheets = {};
+      const sheetMeta = {};
+
+      workbook.SheetNames.forEach((sheetName) => {
+        const ws = workbook.Sheets[sheetName];
+        const ref = ws["!ref"];
+        let rows = [[""]];
+
+        if (ref) {
+          const range = XLSX.utils.decode_range(ref);
+          const totalRows = range.e.r + 1;
+          const totalCols = range.e.c + 1;
+          rows = Array.from({ length: totalRows }, (_, r) =>
+            Array.from({ length: totalCols }, (_, c) => {
+              const addr = XLSX.utils.encode_cell({ r, c });
+              const cell = ws[addr];
+              return cell && cell.v !== undefined && cell.v !== null ? cell.v : "";
+            })
+          );
+        }
+
+        const merges = Array.isArray(ws["!merges"])
+          ? ws["!merges"].map((m) => ({
+              s: { r: m.s.r, c: m.s.c },
+              e: { r: m.e.r, c: m.e.c },
+            }))
+          : [];
+
+        const cols = Array.isArray(ws["!cols"])
+          ? ws["!cols"].map((col) => (col ? { ...col } : null))
+          : [];
+
+        const rowHeights = Array.isArray(ws["!rows"])
+          ? ws["!rows"].map((rowMeta) => (rowMeta ? { ...rowMeta } : null))
+          : [];
+
+        const cellStyles = {};
+        Object.keys(ws).forEach((addr) => {
+          if (addr.startsWith("!")) return;
+          const cell = ws[addr];
+          if (cell && (cell.s || cell.z || cell.t)) {
+            cellStyles[addr] = {
+              z: cell.z || null,
+              alignment: cell.s && cell.s.alignment ? { ...cell.s.alignment } : null,
+              font: cell.s && cell.s.font ? { ...cell.s.font } : null,
+              fill: cell.s && cell.s.fill ? { ...cell.s.fill } : null,
+              border: cell.s && cell.s.border ? { ...cell.s.border } : null,
+            };
+          }
+        });
+
+        sheets[sheetName] = rows;
+        sheetMeta[sheetName] = {
+          merges,
+          cols,
+          rows: rowHeights,
+          cellStyles,
+        };
+      });
+
+      return {
+        sheetNames: workbook.SheetNames,
+        activeSheet: workbook.SheetNames[0] || "Foglio1",
+        sheets,
+        sheetMeta,
+      };
+    }
+
+    function createInitialSlots() {
+      const nowLabel = new Date().toLocaleDateString("it-IT", {
+        day: "2-digit",
+        month: "2-digit",
+      });
+
+      const demoSheets = {
+        Riepilogo: [
+          ["Scheda Operativa", "", "", ""],
+          ["Codice", "Voce", "Quantità", "Note"],
+          ["01", "Articolo esempio A", 12, "Layout preservato"],
+          ["02", "Articolo esempio B", 5, "Modifica diretta"],
+        ],
+      };
+
+      const demoMeta = {
+        Riepilogo: {
+          merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }],
+          cols: [{ wch: 12 }, { wch: 26 }, { wch: 14 }, { wch: 24 }],
+          rows: [{ hpt: 26 }, { hpt: 22 }, { hpt: 20 }, { hpt: 20 }],
+          cellStyles: {},
+        },
+      };
+
+      return Array.from({ length: 6 }, (_, idx) => {
+        const isDemo = idx === 0;
+        return {
+          id: `slot-${idx + 1}`,
+          title: isDemo ? "File Esempio" : `File ${idx + 1}`,
+          fileName: isDemo ? "Esempio_Layout.xlsx" : null,
+          updatedAt: isDemo ? nowLabel : null,
+          activeSheet: "Riepilogo",
+          sheets: isDemo ? demoSheets : { Foglio1: [["", "", ""], ["", "", ""], ["", "", ""]] },
+          sheetMeta: isDemo ? demoMeta : { Foglio1: { merges: [], cols: [], rows: [], cellStyles: {} } },
+          originalSnapshot: isDemo
+            ? {
+                activeSheet: "Riepilogo",
+                sheets: JSON.parse(JSON.stringify(demoSheets)),
+                sheetMeta: JSON.parse(JSON.stringify(demoMeta)),
+              }
+            : null,
+        };
+      });
+    }
+
+    function getMergeInfo(merges, r, c) {
+      if (!Array.isArray(merges)) return { hidden: false, rowSpan: 1, colSpan: 1 };
+      for (const m of merges) {
+        const inRow = r >= m.s.r && r <= m.e.r;
+        const inCol = c >= m.s.c && c <= m.e.c;
+        if (inRow && inCol) {
+          if (r === m.s.r && c === m.s.c) {
+            return {
+              hidden: false,
+              rowSpan: m.e.r - m.s.r + 1,
+              colSpan: m.e.c - m.s.c + 1,
+            };
+          }
+          return { hidden: true, rowSpan: 1, colSpan: 1 };
+        }
+      }
+      return { hidden: false, rowSpan: 1, colSpan: 1 };
+    }
+
+    function ExcelAppHub() {
+      const [slots, setSlots] = useState(() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+        } catch (e) {}
+        return createInitialSlots();
+      });
+
+      const [openSlotId, setOpenSlotId] = useState(null);
+      const [showGridHeaders, setShowGridHeaders] = useState(true);
+      const [customFolderName, setCustomFolderName] = useState(DEFAULT_EXPORT_FOLDER_NAME);
+      const [exportFileNameInput, setExportFileNameInput] = useState("");
+      const [folderHandle, setFolderHandle] = useState(null);
+      const [toast, setToast] = useState(null);
+
+      const uploadTargetSlotRef = useRef(null);
+      const fileInputRef = useRef(null);
+
+      const supportsDirectoryPicker = typeof window !== "undefined" && typeof window.showDirectoryPicker === "function";
+
+      useEffect(() => {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(slots));
+        } catch (e) {}
+      }, [slots]);
+
+      const notify = (msg) => {
+        setToast(msg);
+        setTimeout(() => setToast((prev) => (prev === msg ? null : prev)), 3200);
+      };
+
+      const activeSlot = useMemo(
+        () => slots.find((s) => s.id === openSlotId) || null,
+        [slots, openSlotId]
+      );
+
+      useEffect(() => {
+        if (activeSlot) {
+          const base = (activeSlot.title || activeSlot.fileName || "Foglio_Aggiornato")
+            .replace(/\.[^/.]+$/, "")
+            .trim();
+          setExportFileNameInput(base || "Foglio_Aggiornato");
+        }
+      }, [activeSlot?.id]);
+
+      const handleSlotTitleChange = (slotId, nextTitle) => {
+        setSlots((prev) =>
+          prev.map((s) => (s.id === slotId ? { ...s, title: nextTitle } : s))
+        );
+      };
+
+      const triggerUploadForSlot = (slotId) => {
+        uploadTargetSlotRef.current = slotId;
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+          fileInputRef.current.click();
+        }
+      };
+
+      const handleFileSelected = (e) => {
+        const file = e.target.files && e.target.files[0];
+        const targetId = uploadTargetSlotRef.current;
+        if (!file || !targetId) return;
+
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          try {
+            const data = new Uint8Array(evt.target.result);
+            const wb = XLSX.read(data, { type: "array", cellStyles: true });
+            const parsed = parseWorkbookToPayload(wb);
+            const cleanBaseName = file.name.replace(/\.[^/.]+$/, "");
+            const nowLabel = new Date().toLocaleTimeString("it-IT", {
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+
+            setSlots((prev) =>
+              prev.map((s) => {
+                if (s.id !== targetId) return s;
+                const currentTitle = (s.title || "").trim();
+                const shouldReplaceTitle =
+                  !currentTitle || /^File\s+\d+$/i.test(currentTitle) || currentTitle === "File Esempio";
+                return {
+                  ...s,
+                  title: shouldReplaceTitle ? cleanBaseName : s.title,
+                  fileName: file.name,
+                  updatedAt: nowLabel,
+                  activeSheet: parsed.activeSheet,
+                  sheets: parsed.sheets,
+                  sheetMeta: parsed.sheetMeta,
+                  originalSnapshot: {
+                    activeSheet: parsed.activeSheet,
+                    sheets: JSON.parse(JSON.stringify(parsed.sheets)),
+                    sheetMeta: JSON.parse(JSON.stringify(parsed.sheetMeta)),
+                  },
+                };
+              })
+            );
+            notify(`Caricato "${file.name}" con layout originale`);
+          } catch (err) {
+            notify("Impossibile leggere il file Excel");
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      const handleAddSlot = () => {
+        const nextIndex = slots.length + 1;
+        const newSlot = {
+          id: `slot-${Date.now()}`,
+          title: `File ${nextIndex}`,
+          fileName: null,
+          updatedAt: null,
+          activeSheet: "Foglio1",
+          sheets: { Foglio1: [["", "", ""], ["", "", ""], ["", "", ""]] },
+          sheetMeta: { Foglio1: { merges: [], cols: [], rows: [], cellStyles: {} } },
+          originalSnapshot: null,
+        };
+        setSlots((prev) => [...prev, newSlot]);
+      };
+
+      const handleCellEdit = (rIdx, cIdx, val) => {
+        if (!activeSlot) return;
+        const sheetName = activeSlot.activeSheet;
+        const nowLabel = new Date().toLocaleTimeString("it-IT", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+
+        setSlots((prev) =>
+          prev.map((s) => {
+            if (s.id !== activeSlot.id) return s;
+            const prevRows = s.sheets[sheetName] || [[""]];
+            const nextRows = prevRows.map((row, r) => {
+              if (r !== rIdx) return row;
+              const copy = [...row];
+              copy[cIdx] = val;
+              return copy;
+            });
+            return {
+              ...s,
+              updatedAt: nowLabel,
+              sheets: {
+                ...s.sheets,
+                [sheetName]: nextRows,
+              },
+            };
+          })
+        );
+      };
+
+      const handleRestoreOriginal = () => {
+        if (!activeSlot || !activeSlot.originalSnapshot) return;
+        const snap = activeSlot.originalSnapshot;
+        setSlots((prev) =>
+          prev.map((s) =>
+            s.id === activeSlot.id
+              ? {
+                  ...s,
+                  activeSheet: snap.activeSheet,
+                  sheets: JSON.parse(JSON.stringify(snap.sheets)),
+                  sheetMeta: JSON.parse(JSON.stringify(snap.sheetMeta)),
+                }
+              : s
+          )
+        );
+        notify("Ripristinato il layout originale del file");
+      };
+
+      const handleChooseOrCreateFolder = async () => {
+        if (!supportsDirectoryPicker) {
+          notify("Il browser non supporta la cartella diretta: userà il download standard");
+          return null;
+        }
+        try {
+          const rootHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+          const cleanSubFolder = (customFolderName || DEFAULT_EXPORT_FOLDER_NAME)
+            .replace(/[\\/:*?"<>|]+/g, "_")
+            .trim();
+          const targetHandle = cleanSubFolder
+            ? await rootHandle.getDirectoryHandle(cleanSubFolder, { create: true })
+            : rootHandle;
+          setFolderHandle(targetHandle);
+          notify(`Cartella pronta: "${cleanSubFolder || rootHandle.name}"`);
+          return targetHandle;
+        } catch (err) {
+          if (err && err.name !== "AbortError") {
+            notify("Impossibile accedere alla cartella selezionata");
+          }
+          return null;
+        }
+      };
+
+      const handleExportXlsx = async (slotObj = activeSlot, { forceDirectFolder = false } = {}) => {
+        if (!slotObj) return;
+        const suggestedBase =
+          slotObj.id === activeSlot?.id && exportFileNameInput.trim()
+            ? exportFileNameInput.trim()
+            : slotObj.title || slotObj.fileName || "Foglio_Aggiornato";
+        const fileName = sanitizeExcelFileName(suggestedBase);
+        const wb = buildWorkbookFromSheets(slotObj.sheets, slotObj.sheetMeta);
+
+        if (supportsDirectoryPicker && (forceDirectFolder || folderHandle)) {
+          try {
+            let activeDir = folderHandle;
+            if (!activeDir) {
+              activeDir = await handleChooseOrCreateFolder();
+            }
+            if (!activeDir) return;
+
+            const permission = await activeDir.requestPermission({ mode: "readwrite" });
+            if (permission !== "granted") {
+              notify("Permesso di scrittura nella cartella non concesso");
+              return;
+            }
+
+            const binaryArray = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+            const fileHandle = await activeDir.getFileHandle(fileName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(new Blob([binaryArray], {
+              type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }));
+            await writable.close();
+
+            notify(`Salvato "${fileName}" nella cartella "${activeDir.name}"`);
+            return;
+          } catch (err) {
+            if (err && err.name === "AbortError") return;
+            notify("Salvataggio diretto non riuscito, avvio download standard");
+          }
+        }
+
+        XLSX.writeFile(wb, fileName);
+        notify(`Scaricato "${fileName}"`);
+      };
+
+      const handleShareEmail = (slotObj = activeSlot) => {
+        if (!slotObj) return;
+        const suggestedBase =
+          slotObj.id === activeSlot?.id && exportFileNameInput.trim()
+            ? exportFileNameInput.trim()
+            : slotObj.title || slotObj.fileName || "Foglio_Aggiornato";
+        const fileName = sanitizeExcelFileName(suggestedBase);
+        const subject = encodeURIComponent(`Aggiornamento file: ${fileName}`);
+        const body = encodeURIComponent(
+          `Ciao,\n\nin allegato trovi il file aggiornato "${fileName}" (ricordati di allegare il file appena salvato).\n\nGrazie`
+        );
+        window.location.href = `mailto:?subject=${subject}&body=${body}`;
+      };
+
+      return (
+        <div className="min-h-screen py-5 px-3 sm:px-6">
+          {toast && (
+            <div className="fixed bottom-4 right-4 z-50 rounded-2xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white shadow-lg">
+              {toast}
+            </div>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            onChange={handleFileSelected}
+            className="hidden"
+          />
+
+          {!activeSlot ? (
+            /* INTERFACCIA INIZIALE IN STILE APP COMPATTO */
+            <div className="mx-auto max-w-md rounded-[2rem] border border-slate-300/90 bg-slate-50 p-4 shadow-xl sm:p-5">
+              {/* Barra superiore dell'app */}
+              <div className="flex items-center justify-between rounded-2xl bg-white px-4 py-3 shadow-xs border border-slate-200/80">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-600 text-base font-bold text-white">
+                    📊
+                  </div>
+                  <div>
+                    <div className="text-sm font-extrabold tracking-tight text-slate-900">
+                      Excel Hub
+                    </div>
+                    <div className="text-[11px] font-medium text-slate-500">
+                      Tocca un riquadro per rinominare o aprire
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleAddSlot}
+                  className="rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white active:scale-95 transition cursor-pointer"
+                >
+                  + Riquadro
+                </button>
+              </div>
+
+              {/* Griglia a quadrati stile app */}
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                {slots.map((slot) => {
+                  const hasFile = Boolean(slot.fileName);
+                  return (
+                    <div
+                      key={slot.id}
+                      className="flex aspect-square flex-col justify-between rounded-3xl border border-slate-200 bg-white p-3.5 shadow-xs transition hover:border-emerald-500/70"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            hasFile
+                              ? "bg-emerald-100 text-emerald-800"
+                              : "bg-slate-100 text-slate-500"
+                          }`}
+                        >
+                          {hasFile ? "● Pronto" : "○ Vuoto"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => triggerUploadForSlot(slot.id)}
+                          title="Carica file Excel in questo riquadro"
+                          className="rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer"
+                        >
+                          ↑ File
+                        </button>
+                      </div>
+
+                      <div className="my-1">
+                        <input
+                          type="text"
+                          value={slot.title}
+                          onChange={(e) => handleSlotTitleChange(slot.id, e.target.value)}
+                          placeholder="Nome file..."
+                          aria-label="Nome del file da aggiungere"
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-center text-sm font-extrabold text-slate-900 focus:border-emerald-600 focus:bg-white focus:outline-none"
+                        />
+                        <div className="mt-1 truncate text-center text-[10px] text-slate-400">
+                          {slot.fileName
+                            ? `${slot.fileName}${slot.updatedAt ? ` • ${slot.updatedAt}` : ""}`
+                            : "Scrivi il nome o carica .xlsx"}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setOpenSlotId(slot.id)}
+                        className="w-full rounded-xl bg-slate-900 py-2 text-xs font-bold text-white hover:bg-emerald-700 active:scale-[0.98] transition cursor-pointer"
+                      >
+                        Apri
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Barra azioni rapida in basso stile app */}
+              <div className="mt-4 flex items-center justify-between gap-2 rounded-2xl bg-white px-3.5 py-2.5 border border-slate-200/80 text-[11px] text-slate-500">
+                <span>Le modifiche restano in locale finché non esporti</span>
+                <span className="font-bold text-slate-700">{slots.length} riquadri</span>
+              </div>
+            </div>
+          ) : (
+            /* VISTA FOGLIO CON LAYOUT ORIGINALE INVARIATO */
+            <div className="mx-auto max-w-[1400px] rounded-2xl border border-slate-300 bg-white shadow-sm overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setOpenSlotId(null)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100 cursor-pointer"
+                  >
+                    ← Riquadri
+                  </button>
+                  <div>
+                    <div className="text-sm font-bold text-slate-900">
+                      {activeSlot.title || "Foglio"}
+                      {activeSlot.fileName ? ` (${activeSlot.fileName})` : ""}
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Layout originale preservato (celle unite, larghezze, altezze)
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => triggerUploadForSlot(activeSlot.id)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  >
+                    Carica / Sostituisci Excel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowGridHeaders((v) => !v)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  >
+                    {showGridHeaders ? "Nascondi Righe/Col" : "Mostra Righe/Col"}
+                  </button>
+                  {activeSlot.originalSnapshot && (
+                    <button
+                      type="button"
+                      onClick={handleRestoreOriginal}
+                      className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 cursor-pointer"
+                    >
+                      ↺ Ripristina originale
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleShareEmail(activeSlot)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100 cursor-pointer"
+                  >
+                    ✉ Condividi Email
+                  </button>
+                </div>
+              </div>
+
+              {/* Barra salvataggio mirato: nome file + cartella ad hoc */}
+              <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-slate-200 bg-emerald-50/50 px-4 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-slate-700">Nome file:</span>
+                  <input
+                    type="text"
+                    value={exportFileNameInput}
+                    onChange={(e) => setExportFileNameInput(e.target.value)}
+                    placeholder="Nome file senza estensione"
+                    className="w-44 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 focus:border-emerald-600 focus:outline-none"
+                  />
+                  <span className="text-slate-400">.xlsx</span>
+
+                  <span className="ml-2 font-semibold text-slate-700">Cartella:</span>
+                  <input
+                    type="text"
+                    value={customFolderName}
+                    onChange={(e) => setCustomFolderName(e.target.value)}
+                    placeholder="Nome cartella"
+                    className="w-36 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 focus:border-emerald-600 focus:outline-none"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {supportsDirectoryPicker && (
+                    <button
+                      type="button"
+                      onClick={handleChooseOrCreateFolder}
+                      className="rounded-lg border border-emerald-700/40 bg-white px-3 py-1 text-xs font-bold text-emerald-900 hover:bg-emerald-50 cursor-pointer"
+                    >
+                      {folderHandle ? `📁 ${folderHandle.name}` : "📁 Scegli/Crea Cartella"}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleExportXlsx(activeSlot, { forceDirectFolder: true })}
+                    className="rounded-lg bg-emerald-700 px-3.5 py-1 text-xs font-bold text-white hover:bg-emerald-800 cursor-pointer"
+                  >
+                    ⬇ Salva in Cartella
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1 border-b border-slate-200 bg-slate-100/80 px-3 py-1.5">
+                {Object.keys(activeSlot.sheets).map((sName) => {
+                  const isCurrent = activeSlot.activeSheet === sName;
+                  return (
+                    <button
+                      key={sName}
+                      type="button"
+                      onClick={() =>
+                        setSlots((prev) =>
+                          prev.map((s) =>
+                            s.id === activeSlot.id ? { ...s, activeSheet: sName } : s
+                          )
+                        )
+                      }
+                      className={`rounded-md px-3 py-1 text-xs font-semibold cursor-pointer ${
+                        isCurrent
+                          ? "bg-white text-slate-900 shadow-2xs border border-slate-300"
+                          : "text-slate-600 hover:bg-white/60"
+                      }`}
+                    >
+                      {sName}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="overflow-auto max-h-[75vh] bg-white">
+                {(() => {
+                  const rows = activeSlot.sheets[activeSlot.activeSheet] || [[""]];
+                  const meta = (activeSlot.sheetMeta && activeSlot.sheetMeta[activeSlot.activeSheet]) || {
+                    merges: [],
+                    cols: [],
+                    rows: [],
+                    cellStyles: {},
+                  };
+                  const colCount = rows.reduce((max, r) => Math.max(max, r.length), 1);
+
+                  return (
+                    <table className="border-collapse table-fixed">
+                      {showGridHeaders && (
+                        <thead>
+                          <tr>
+                            <th className="sticky top-0 left-0 z-20 w-11 border border-slate-300 bg-slate-100 text-[11px] font-semibold text-slate-500"></th>
+                            {Array.from({ length: colCount }, (_, cIdx) => {
+                              const colWidthPx =
+                                meta.cols && meta.cols[cIdx] && meta.cols[cIdx].wch
+                                  ? Math.max(64, Math.min(360, Math.round(meta.cols[cIdx].wch * 8.5)))
+                                  : 120;
+                              return (
+                                <th
+                                  key={cIdx}
+                                  style={{ width: `${colWidthPx}px`, minWidth: `${colWidthPx}px` }}
+                                  className="sticky top-0 z-10 border border-slate-300 bg-slate-100 px-2 py-1 text-center text-[11px] font-semibold text-slate-600"
+                                >
+                                  {XLSX.utils.encode_col(cIdx)}
+                                </th>
+                              );
+                            })}
+                          </tr>
+                        </thead>
+                      )}
+                      <tbody>
+                        {rows.map((row, rIdx) => {
+                          const rowHeightPx =
+                            meta.rows && meta.rows[rIdx] && meta.rows[rIdx].hpt
+                              ? Math.max(24, Math.round(meta.rows[rIdx].hpt * 1.33))
+                              : 28;
+
+                          return (
+                            <tr key={rIdx} style={{ height: `${rowHeightPx}px` }}>
+                              {showGridHeaders && (
+                                <td className="sticky left-0 z-10 border border-slate-300 bg-slate-100 text-center text-[11px] font-semibold text-slate-500">
+                                  {rIdx + 1}
+                                </td>
+                              )}
+                              {Array.from({ length: colCount }, (_, cIdx) => {
+                                const merge = getMergeInfo(meta.merges, rIdx, cIdx);
+                                if (merge.hidden) return null;
+
+                                const addr = XLSX.utils.encode_cell({ r: rIdx, c: cIdx });
+                                const styleInfo = meta.cellStyles && meta.cellStyles[addr];
+                                const align =
+                                  styleInfo && styleInfo.alignment && styleInfo.alignment.horizontal
+                                    ? styleInfo.alignment.horizontal
+                                    : "left";
+                                const isBold =
+                                  styleInfo && styleInfo.font && styleInfo.font.bold ? true : false;
+                                const bgHex =
+                                  styleInfo &&
+                                  styleInfo.fill &&
+                                  styleInfo.fill.fgColor &&
+                                  styleInfo.fill.fgColor.rgb
+                                    ? `#${styleInfo.fill.fgColor.rgb.slice(-6)}`
+                                    : null;
+
+                                const cellVal = row[cIdx] ?? "";
+
+                                return (
+                                  <td
+                                    key={cIdx}
+                                    rowSpan={merge.rowSpan}
+                                    colSpan={merge.colSpan}
+                                    style={{
+                                      backgroundColor: bgHex || undefined,
+                                    }}
+                                    className="border border-slate-300 p-0 align-middle"
+                                  >
+                                    <input
+                                      type="text"
+                                      value={cellVal}
+                                      onChange={(e) => handleCellEdit(rIdx, cIdx, e.target.value)}
+                                      style={{ textAlign: align }}
+                                      className={`h-full w-full bg-transparent px-2 py-1 text-xs text-slate-900 focus:bg-sky-50 focus:outline-2 focus:outline-sky-500 ${
+                                        isBold ? "font-bold" : "font-normal"
+                                      }`}
+                                    />
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<ExcelAppHub />);
+  </script>
+</body>
+</html>
