@@ -128,6 +128,7 @@
 
         try {
           const {
+            isAuthenticated,
             pendingRoleId,
             passwordDraft,
             passwordError,
@@ -417,11 +418,14 @@
         if (!raw) return;
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== "object") return;
+        const protectedSessionKeys = ["isAuthenticated", "pendingRoleId", "loginPasswordDraft", "loginError"];
         Object.keys(DEFAULT_STATE).forEach((k) => {
+          if (protectedSessionKeys.includes(k)) return;
           if (parsed[k] !== undefined) {
             state[k] = parsed[k];
           }
         });
+        state.isAuthenticated = false;
         if (!state.selectedDate) state.selectedDate = getTodayISO();
         if (!state.selectedMonth) state.selectedMonth = state.selectedDate.slice(0, 7);
         if (!Array.isArray(state.noteSelectedDeptIds)) {
@@ -435,6 +439,7 @@
     function saveState() {
       try {
         const {
+          isAuthenticated,
           pendingRoleId,
           passwordDraft,
           passwordError,
