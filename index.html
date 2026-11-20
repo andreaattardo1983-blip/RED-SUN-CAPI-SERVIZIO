@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <style>
+    /* Tipografia e animazioni per interazioni rapide su desktop e mobile */
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
@@ -38,12 +39,13 @@
   <!-- Contenitore notifiche toast non bloccanti -->
   <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full px-4 sm:px-0"></div>
 
+  <!-- Modulo sincronizzazione in tempo reale tra dispositivi (se configurato) -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
     import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    const STORAGE_KEY = "grand_hotel_capi_servizio_hub_v1";
+    const CLOUD_STORAGE_KEY = "grand_hotel_capi_servizio_hub_v1";
     const APP_ID = typeof __app_id !== "undefined" && __app_id ? __app_id : "grand_hotel_capi_servizio_hub";
     const SHARED_DOC_PATH = ["artifacts", APP_ID, "public", "data", "hotel_hub_shared_state"];
 
@@ -52,6 +54,8 @@
     let cloudUser = null;
     let cloudReady = false;
     let isApplyingRemoteSync = false;
+    let lastAppliedRemoteUpdatedAt = 0;
+    let lastRemoteEventLabel = "Solo Locale (No Cloud)";
 
     const SHARED_STATE_KEYS = [
       "sectorCredentials",
@@ -77,14 +81,20 @@
     }
 
     function applySharedPayloadToState(payload) {
-      if (!payload || typeof payload !== "object" || typeof state === "undefined") return;
+      if (!payload || typeof payload !== "object" || typeof state === "undefined") return false;
+      const remoteUpdatedAt = Number(payload.updatedAt || 0);
+      if (remoteUpdatedAt && remoteUpdatedAt <= lastAppliedRemoteUpdatedAt) {
+        return false;
+      }
+
       isApplyingRemoteSync = true;
       try {
         SHARED_STATE_KEYS.forEach((key) => {
           if (payload[key] !== undefined) {
-            state[key] = payload[key];
+            state[key] = JSON.parse(JSON.stringify(payload[key]));
           }
         });
+
         if (Array.isArray(state.complaints)) {
           state.complaints = state.complaints.map((c) => {
             const st = c?.status;
@@ -93,6 +103,17 @@
             return { ...c, status: ["Aperta", "In lavorazione", "Risolta"].includes(st) ? st : "Aperta" };
           });
         }
+
+        if (remoteUpdatedAt) {
+          lastAppliedRemoteUpdatedAt = remoteUpdatedAt;
+          const timeStr = new Date(remoteUpdatedAt).toLocaleTimeString("it-IT", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit"
+          });
+          lastRemoteEventLabel = `Agg. ${timeStr} (${payload.updatedBy || "remoto"})`;
+        }
+
         try {
           const {
             pendingRoleId,
@@ -102,10 +123,11 @@
             loginError,
             ...persistable
           } = state;
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
-        } catch (e) {
-          // Ignora errori di scrittura locale
+          localStorage.setItem(CLOUD_STORAGE_KEY, JSON.stringify(persistable));
+        } catch (err) {
+          console.warn("Salvataggio locale durante sync non riuscito:", err);
         }
+        return true;
       } finally {
         isApplyingRemoteSync = false;
       }
@@ -114,19 +136,42 @@
     async function pushSharedStateToCloud() {
       if (!cloudReady || !cloudDb || !cloudUser || isApplyingRemoteSync || typeof state === "undefined") return;
       try {
+        const nowTs = Date.now();
+        lastAppliedRemoteUpdatedAt = nowTs;
         const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
         await setDoc(
           docRef,
           {
             ...extractSharedPayload(state),
-            updatedAt: Date.now(),
+            updatedAt: nowTs,
             updatedBy: state.activeRole || "unknown"
           },
           { merge: true }
         );
+        const timeStr = new Date(nowTs).toLocaleTimeString("it-IT", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit"
+        });
+        lastRemoteEventLabel = `Agg. ${timeStr}`;
+        if (typeof render === "function") render();
       } catch (err) {
-        console.warn("Sincronizzazione cloud in scrittura non riuscita:", err);
+        console.warn("Scrittura cloud non riuscita:", err);
       }
+    }
+
+    async function pullLatestFromCloud() {
+      if (!cloudReady || !cloudDb || !cloudUser) return false;
+      try {
+        const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          return applySharedPayloadToState(snap.data());
+        }
+      } catch (err) {
+        console.warn("Lettura cloud non riuscita:", err);
+      }
+      return false;
     }
 
     async function initCloudSync() {
@@ -152,6 +197,8 @@
         cloudUser = cloudAuth.currentUser;
         if (!cloudUser) return;
         cloudReady = true;
+        lastRemoteEventLabel = "Connesso al Cloud";
+        if (typeof render === "function") render();
 
         const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
         const snap = await getDoc(docRef);
@@ -165,38 +212,32 @@
         onSnapshot(
           docRef,
           (snapshot) => {
-            if (!snapshot.exists()) return;
-            applySharedPayloadToState(snapshot.data());
-            if (typeof render === "function") {
+            if (!snapshot.exists() || isApplyingRemoteSync) return;
+            const changed = applySharedPayloadToState(snapshot.data());
+            if (changed && typeof render === "function") {
               render();
             }
           },
           (err) => {
-            console.warn("Ascolto sincronizzazione cloud interrotto:", err);
+            console.warn("Ascolto in tempo reale interrotto:", err);
+            lastRemoteEventLabel = "Errore Cloud";
+            if (typeof render === "function") render();
           }
         );
       } catch (err) {
-        console.warn("Sincronizzazione cloud non attiva in questo ambiente:", err);
+        console.warn("Modalità locale attiva:", err);
       }
     }
 
     window.__cloudSync = {
       isActive: () => cloudReady,
+      getStatus: () => ({
+        ready: cloudReady,
+        label: lastRemoteEventLabel,
+        lastUpdatedAt: lastAppliedRemoteUpdatedAt
+      }),
       push: pushSharedStateToCloud,
-      pullLatest: async () => {
-        if (!cloudReady || !cloudDb || !cloudUser) return false;
-        try {
-          const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
-          const snap = await getDoc(docRef);
-          if (snap.exists()) {
-            applySharedPayloadToState(snap.data());
-            return true;
-          }
-        } catch (err) {
-          console.warn("Lettura cloud non riuscita:", err);
-        }
-        return false;
-      }
+      pullLatest: pullLatestFromCloud
     };
 
     initCloudSync();
@@ -205,6 +246,7 @@
   <script>
     const STORAGE_KEY = "grand_hotel_capi_servizio_hub_v1";
 
+    // Reparti e settori dell'hotel (inclusa Direzione per organico e comunicazioni)
     const DEPARTMENTS = [
       { id: "direzione", name: "Direzione", badgeClass: "bg-amber-100 text-amber-950 border-amber-300" },
       { id: "ricevimento", name: "Ricevimento", badgeClass: "bg-sky-100 text-sky-900 border-sky-300" },
@@ -236,6 +278,7 @@
       { code: ".", label: "Non segnato", cellClass: "bg-slate-50 text-slate-400 border-slate-200" }
     ];
 
+    // Cartelle d'archivio per Direttore e Vice Direttore
     const ARCHIVE_CATEGORIES = [
       { id: "ordini_servizio", label: "Ordini di Servizio & Note", badgeClass: "bg-sky-100 text-sky-900 border-sky-300", icon: "📋" },
       { id: "cambi_camera", label: "Cambi Camera", badgeClass: "bg-teal-100 text-teal-900 border-teal-300", icon: "🔑" },
@@ -413,7 +456,6 @@
         }
       ],
       archiveFilterCategory: null,
-      archiveQuickTool: null,
       archiveSearchQuery: "",
       archiveDateFilter: "",
       archiveEntries: [
@@ -543,7 +585,7 @@
           }
         });
       } catch (err) {
-        console.warn("Sincronizzazione dati condivisi non riuscita:", err);
+        console.warn("Sincronizzazione dati locali non riuscita:", err);
       }
     }
 
@@ -569,7 +611,7 @@
           window.__cloudSync.push();
         }
       } catch (err) {
-        console.warn("Impossibile salvare lo stato locale:", err);
+        console.warn("Impossibile salvare lo stato:", err);
       }
     }
 
@@ -603,11 +645,13 @@
         .replace(/'/g, "&#39;");
     }
 
+    // Controlla se una voce è già stata archiviata per evitare duplicati
     function isEntryArchived(sourceRef) {
       if (!sourceRef) return false;
       return (state.archiveEntries || []).some((a) => a.sourceRef === sourceRef);
     }
 
+    // Inserisce una voce in archivio una sola volta con data e orario
     function pushUniqueArchiveEntry({ sourceRef, category, title, detail, date, time, authorRole }) {
       if (sourceRef && isEntryArchived(sourceRef)) {
         return false;
@@ -784,6 +828,11 @@
 
     const actions = {
       openSection(sectionId) {
+        if (sectionId === "archivio") {
+          state.archiveFilterCategory = null;
+          state.archiveSearchQuery = "";
+          state.archiveDateFilter = "";
+        }
         state.activeSection = sectionId;
         render();
       },
@@ -791,6 +840,15 @@
       goHome() {
         state.activeSection = null;
         render();
+      },
+
+      async manualSyncNow() {
+        syncSharedStateFromStorage();
+        if (window.__cloudSync && typeof window.__cloudSync.pullLatest === "function") {
+          await window.__cloudSync.pullLatest();
+        }
+        render();
+        showToast("Dati sincronizzati");
       },
 
       setLoginUsernameDraft(val) {
@@ -1426,12 +1484,12 @@
         showToast(`Segnalazione: ${cmp.status}`);
       },
 
+      // Apri cartella d'archivio con un clic, chiudi con un secondo clic sullo stesso riquadro
       toggleArchiveFolderTile(catId) {
         if (state.archiveFilterCategory === catId) {
           state.archiveFilterCategory = null;
         } else {
           state.archiveFilterCategory = catId;
-          state.archiveQuickTool = null;
         }
         render();
       },
@@ -1588,7 +1646,7 @@
                   autocomplete="username"
                   value="${escapeHTML(state.loginUsernameDraft)}"
                   oninput="actions.setLoginUsernameDraft(this.value)"
-                  placeholder="Inserisci utente..."
+                  placeholder="Inserisci utente (es. direttore)..."
                   autofocus
                   class="w-full rounded-xl border ${state.loginError ? "border-rose-400 bg-rose-50/30" : "border-slate-300"} px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
@@ -1624,6 +1682,10 @@
 
     function renderHeader() {
       const role = getCurrentRoleObj();
+      const syncStatus = window.__cloudSync && typeof window.__cloudSync.getStatus === "function"
+        ? window.__cloudSync.getStatus()
+        : { ready: false, label: "Solo Locale (No Cloud)" };
+
       const scopeBadge = isDirectorOrVice()
         ? `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-950 border border-amber-300">Visione Globale • Tutti i Reparti</span>`
         : `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-sky-100 text-sky-900 border border-sky-300">Reparto: ${escapeHTML(getDepartmentObj(role.deptId).name)}</span>`;
@@ -1664,6 +1726,19 @@
                 <label for="global-date" class="text-xs font-semibold text-slate-500">Data:</label>
                 <input id="global-date" type="date" value="${escapeHTML(state.selectedDate)}" onchange="actions.setDate(this.value)" class="bg-transparent text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none cursor-pointer" />
               </div>
+
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+                syncStatus.ready
+                  ? "bg-emerald-100 text-emerald-900 border-emerald-300"
+                  : "bg-amber-100 text-amber-950 border-amber-300"
+              }">
+                <span class="w-2 h-2 rounded-full ${syncStatus.ready ? "bg-emerald-600" : "bg-amber-600"}"></span>
+                <span>${escapeHTML(syncStatus.label)}</span>
+              </span>
+
+              <button onclick="actions.manualSyncNow()" title="Aggiorna dati" class="press-btn inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-950 text-xs font-bold">
+                <span>↻ Sincronizza</span>
+              </button>
 
               <button onclick="actions.logout()" title="Esci dal profilo" class="press-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-rose-50 hover:border-rose-300 hover:text-rose-700 text-xs font-semibold text-slate-700">
                 <span>Esci</span>
@@ -2454,13 +2529,7 @@
               <div class="flex items-center justify-between">
                 <div>
                   <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Richieste Manutenzione</h3>
-                  <p class="text-xs text-slate-500">
-                    ${
-                      readOnlyMaintenance
-                        ? "Clicca sul badge di stato per avanzare: Aperta → In corso → Completata"
-                        : "Clicca sul badge di stato per avanzare: Aperta → In corso → Completata"
-                    }
-                  </p>
+                  <p class="text-xs text-slate-500">Clicca sul badge di stato per avanzare: Aperta → In corso → Completata</p>
                 </div>
                 <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">${state.maintenanceTickets.length}</span>
               </div>
@@ -2612,7 +2681,7 @@
         <div>
           ${renderSectionTopBar(
             "Archivio Direzione",
-            "Tutte le comunicazioni, cambi camera, pasti e segnalazioni confluiscono automaticamente qui divise per data e orario."
+            "Clicca su un riquadro per aprire la cartella e clicca di nuovo sullo stesso riquadro per chiuderla."
           )}
 
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 mb-6">
@@ -2654,7 +2723,7 @@
                       <span class="text-2xl">${activeCatMeta.icon}</span>
                       <div>
                         <h3 class="text-base sm:text-lg font-extrabold text-slate-900">${escapeHTML(activeCatMeta.label)}</h3>
-                        <p class="text-xs text-slate-500">${filteredFolderEntries.length} voci archiviate • ordinate per data e orario</p>
+                        <p class="text-xs text-slate-500">${filteredFolderEntries.length} voci archiviate • divise per data e orario</p>
                       </div>
                     </div>
                     <button
@@ -2878,7 +2947,7 @@
           ${renderActiveSection()}
         </main>
         <footer class="border-t border-slate-200/80 bg-white/80 py-3.5 px-4 text-center text-xs text-slate-500">
-          Grand Hotel — Capi Servizio Hub • Accesso per reparto con sincronizzazione dati
+          Grand Hotel — Capi Servizio Hub • Coordinamento reparti &amp; Direzione
         </footer>
         ${renderRoleLockModal()}
       `;
