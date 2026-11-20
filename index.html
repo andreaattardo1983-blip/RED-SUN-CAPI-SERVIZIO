@@ -43,8 +43,9 @@
     import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
     const CLOUD_STORAGE_KEY = "grand_hotel_capi_servizio_hub_v1";
-    const APP_ID = typeof __app_id !== "undefined" && __app_id ? __app_id : "grand_hotel_capi_servizio_hub";
-    const SHARED_DOC_PATH = ["artifacts", APP_ID, "public", "data", "hotel_hub_shared_state"];
+    const rawAppId = typeof __app_id !== "undefined" && __app_id ? String(__app_id) : "grand_hotel_capi_servizio_hub";
+    const SAFE_APP_ID = rawAppId.replace(/[^a-zA-Z0-9_-]/g, "_") || "grand_hotel_capi_servizio_hub";
+    const SHARED_DOC_PATH = ["artifacts", SAFE_APP_ID, "public", "data", "hotel_hub_shared_state"];
 
     let cloudDb = null;
     let cloudAuth = null;
@@ -80,7 +81,7 @@
       const payload = {};
       SHARED_STATE_KEYS.forEach((key) => {
         if (sourceObj && sourceObj[key] !== undefined) {
-          payload[key] = sourceObj[key];
+          payload[key] = JSON.parse(JSON.stringify(sourceObj[key]));
         }
       });
       return payload;
@@ -117,7 +118,7 @@
             minute: "2-digit",
             second: "2-digit"
           });
-          lastRemoteEventLabel = `Agg. ${timeStr} (${payload.updatedBy || "remoto"})`;
+          lastRemoteEventLabel = `Agg. ${timeStr} (${String(payload.updatedBy || "remoto")})`;
           cloudReady = true;
           cloudErrorState = false;
         }
@@ -147,12 +148,13 @@
         const nowTs = Date.now();
         lastAppliedRemoteUpdatedAt = nowTs;
         const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
+        const safePayload = extractSharedPayload(state);
         await setDoc(
           docRef,
           {
-            ...extractSharedPayload(state),
+            ...safePayload,
             updatedAt: nowTs,
-            updatedBy: state.activeRole || "unknown"
+            updatedBy: String(state.activeRole || "unknown")
           },
           { merge: true }
         );
@@ -164,7 +166,7 @@
         setCloudBannerStatus(`Agg. ${timeStr}`, { ready: true, error: false });
       } catch (err) {
         console.warn("Scrittura cloud non riuscita:", err);
-        const codeText = String(err?.code || err?.message || "errore");
+        const codeText = String(err?.code || err?.message || "errore").replace("firestore/", "");
         setCloudBannerStatus(`No Cloud (${codeText})`, {
           ready: false,
           error: true
@@ -182,7 +184,7 @@
         }
       } catch (err) {
         console.warn("Lettura cloud non riuscita:", err);
-        const codeText = String(err?.code || err?.message || "errore");
+        const codeText = String(err?.code || err?.message || "errore").replace("firestore/", "");
         setCloudBannerStatus(`No Cloud (${codeText})`, { ready: false, error: true });
       }
       return false;
@@ -202,7 +204,7 @@
         },
         (err) => {
           console.warn("Ascolto in tempo reale interrotto:", err);
-          const codeText = String(err?.code || err?.message || "errore");
+          const codeText = String(err?.code || err?.message || "errore").replace("firestore/", "");
           setCloudBannerStatus(`No Cloud (${codeText})`, {
             ready: false,
             error: true
@@ -247,12 +249,11 @@
         await attachRealtimeListener();
       } catch (err) {
         console.warn("Modalità locale attiva:", err);
-        const errCode = String(err?.code || "");
+        const errCode = String(err?.code || "").replace("auth/", "").replace("firestore/", "");
         const errMsg = String(err?.message || "");
         const shortDetail = errCode || errMsg.slice(0, 42) || "No Cloud";
 
-        // Tentativo di fallback diretto su Firestore se l'auth non blocca il database
-        if (cloudDb) {
+        if (cloudDb && errCode !== "invalid-argument") {
           try {
             const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
             const fallbackSnap = await getDoc(docRef);
