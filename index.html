@@ -680,6 +680,10 @@
       },
 
       openSection(sectionId) {
+        if (isMaintenanceRole() && sectionId === "pasti") {
+          showToast("Sezione non disponibile per il reparto Manutenzione", "warning");
+          return;
+        }
         state.activeSection = sectionId;
         render();
       },
@@ -964,6 +968,10 @@
 
       addServiceNote(event) {
         event.preventDefault();
+        if (isMaintenanceRole()) {
+          showToast("Il ruolo Manutenzione può solo ricevere le note di servizio", "warning");
+          return;
+        }
         const form = event.target;
         const text = form.noteText.value.trim();
         if (!text) return;
@@ -1021,6 +1029,10 @@
       },
 
       deleteServiceNote(noteId) {
+        if (isMaintenanceRole()) {
+          showToast("Il ruolo Manutenzione può solo ricevere le note di servizio", "warning");
+          return;
+        }
         state.serviceNotes = state.serviceNotes.filter((n) => n.id !== noteId);
         saveState();
         render();
@@ -1028,6 +1040,7 @@
       },
 
       updateMealCount(field, rawValue) {
+        if (isMaintenanceRole()) return;
         const rec = getMealRecordForSelectedDate();
         rec[field] = Math.max(0, parseInt(rawValue, 10) || 0);
         const nowTime = getCurrentTimeHHMM();
@@ -1062,6 +1075,7 @@
 
       addIntoleranceNotice(event) {
         event.preventDefault();
+        if (isMaintenanceRole()) return;
         const form = event.target;
         const room = form.intRoom.value.trim();
         const detail = form.intDetail.value.trim();
@@ -1104,6 +1118,10 @@
 
       addRoomChangeNotice(event) {
         event.preventDefault();
+        if (isMaintenanceRole()) {
+          showToast("Il ruolo Manutenzione non gestisce i cambi camera", "warning");
+          return;
+        }
         const form = event.target;
         const fromRoom = form.fromRoom.value.trim();
         const toRoom = form.toRoom.value.trim();
@@ -1148,6 +1166,7 @@
 
       addPacketLunch(event) {
         event.preventDefault();
+        if (isMaintenanceRole()) return;
         const form = event.target;
         const room = form.plRoom.value.trim();
         const diet = form.plDiet.value;
@@ -1559,6 +1578,8 @@
 
     function renderKPISummary() {
       const kpi = computeDailyKPIs();
+      const hideMealsForMaintenance = isMaintenanceRole();
+
       return `
         <section class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
           <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-4 shadow-xs">
@@ -1577,8 +1598,8 @@
               <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Totale Pasti</p>
               <span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
             </div>
-            <p class="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">${kpi.totalMeals}</p>
-            <p class="mt-1 text-xs text-slate-500">Colazioni, pranzi e cene</p>
+            <p class="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">${hideMealsForMaintenance ? "—" : kpi.totalMeals}</p>
+            <p class="mt-1 text-xs text-slate-500">${hideMealsForMaintenance ? "Non attivo per Manutenzione" : "Colazioni, pranzi e cene"}</p>
           </div>
 
           <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-4 shadow-xs">
@@ -1586,8 +1607,8 @@
               <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Packet Lunch</p>
               <span class="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
             </div>
-            <p class="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">${kpi.packetCount}</p>
-            <p class="mt-1 text-xs text-slate-500">Cestini prenotati oggi</p>
+            <p class="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">${hideMealsForMaintenance ? "—" : kpi.packetCount}</p>
+            <p class="mt-1 text-xs text-slate-500">${hideMealsForMaintenance ? "Non attivo per Manutenzione" : "Cestini prenotati oggi"}</p>
           </div>
 
           <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-4 shadow-xs">
@@ -1604,6 +1625,7 @@
 
     function renderHomeMenu() {
       const kpi = computeDailyKPIs();
+      const maintenanceOnly = isMaintenanceRole();
       const visibleNotesCount = getVisibleNotes().length;
       const roomChangesCount = state.roomChangeNotices.filter((r) => r.date === state.selectedDate).length;
       const intolerancesCount = state.intoleranceNotices.filter((i) => i.date === state.selectedDate).length;
@@ -1617,8 +1639,11 @@
           accent: "from-emerald-500 to-teal-700",
           badgeStyle: "bg-emerald-100 text-emerald-900 border-emerald-200",
           icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`
-        },
-        {
+        }
+      ];
+
+      if (!maintenanceOnly) {
+        cards.push({
           id: "pasti",
           title: "Movimento Pasti & Intolleranze",
           subtitle: "Coperti giornalieri, packet lunch e avvisi intolleranze alimentari",
@@ -1626,26 +1651,30 @@
           accent: "from-amber-500 to-orange-600",
           badgeStyle: "bg-amber-100 text-amber-950 border-amber-200",
           icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z"/></svg>`
-        },
-        {
-          id: "note",
-          title: "Note di Servizio & Cambi Camera",
-          subtitle: "Comunicazioni operative tra reparti e avvisi rapidi cambio camera",
-          badge: `${visibleNotesCount} note • ${roomChangesCount} cambi cam.`,
-          accent: "from-sky-500 to-blue-700",
-          badgeStyle: "bg-sky-100 text-sky-900 border-sky-200",
-          icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h10M7 12h6m-6 4h8M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>`
-        },
-        {
-          id: "manutenzione",
-          title: "Manutenzione & Segnalazioni",
-          subtitle: "Interventi tecnici per camera/area e segnalazioni ospiti",
-          badge: `${kpi.openMaintenance} manutenzioni aperte`,
-          accent: "from-violet-600 to-indigo-700",
-          badgeStyle: "bg-violet-100 text-violet-900 border-violet-200",
-          icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>`
-        }
-      ];
+        });
+      }
+
+      cards.push({
+        id: "note",
+        title: maintenanceOnly ? "Note di Servizio Ricevute" : "Note di Servizio & Cambi Camera",
+        subtitle: maintenanceOnly
+          ? "Visualizza le note di servizio inviate al reparto Manutenzione (sola lettura)"
+          : "Comunicazioni operative tra reparti e avvisi rapidi cambio camera",
+        badge: maintenanceOnly ? `${visibleNotesCount} note ricevute` : `${visibleNotesCount} note • ${roomChangesCount} cambi cam.`,
+        accent: "from-sky-500 to-blue-700",
+        badgeStyle: "bg-sky-100 text-sky-900 border-sky-200",
+        icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h10M7 12h6m-6 4h8M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>`
+      });
+
+      cards.push({
+        id: "manutenzione",
+        title: "Manutenzione & Segnalazioni",
+        subtitle: "Interventi tecnici per camera/area e segnalazioni ospiti",
+        badge: `${kpi.openMaintenance} manutenzioni aperte`,
+        accent: "from-violet-600 to-indigo-700",
+        badgeStyle: "bg-violet-100 text-violet-900 border-violet-200",
+        icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>`
+      });
 
       if (isDirectorOrVice()) {
         cards.push({
@@ -2003,6 +2032,17 @@
     }
 
     function renderMealMovementsSection() {
+      if (isMaintenanceRole()) {
+        return `
+          <div>
+            ${renderSectionTopBar("Sezione Non Disponibile", "Il reparto Manutenzione non gestisce Movimento Pasti e Intolleranze.")}
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 text-sm text-slate-600">
+              Questa sezione è disabilitata per il profilo Manutenzione.
+            </div>
+          </div>
+        `;
+      }
+
       const mealRec = getMealRecordForSelectedDate();
       const totalMeals = Number(mealRec.breakfast || 0) + Number(mealRec.lunch || 0) + Number(mealRec.dinner || 0);
       const dayIntolerances = state.intoleranceNotices.filter((i) => i.date === state.selectedDate);
@@ -2150,7 +2190,50 @@
     function renderServiceNotesSection() {
       const visibleNotes = getVisibleNotes();
       const role = getCurrentRoleObj();
+      const maintenanceOnly = isMaintenanceRole();
       const dayRoomChanges = state.roomChangeNotices.filter((r) => r.date === state.selectedDate);
+
+      if (maintenanceOnly) {
+        return `
+          <div>
+            ${renderSectionTopBar(
+              "Note di Servizio Ricevute",
+              "Puoi esclusivamente leggere le note di servizio inviate al reparto Manutenzione."
+            )}
+
+            <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col gap-4">
+              <div class="flex items-center justify-between gap-2">
+                <div>
+                  <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Bacheca Note per Manutenzione</h3>
+                  <p class="text-xs text-slate-500">Solo ricezione • Data selezionata: <strong class="text-slate-700">${escapeHTML(state.selectedDate)}</strong></p>
+                </div>
+                <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-sky-100 text-sky-900 border border-sky-200">${visibleNotes.length} note</span>
+              </div>
+
+              <div class="space-y-2.5 max-h-[480px] overflow-y-auto pr-1">
+                ${
+                  visibleNotes.length === 0
+                    ? `<div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-xs text-slate-500">Nessuna nota di servizio ricevuta per questa data.</div>`
+                    : visibleNotes
+                        .map(
+                          (note) => `
+                            <div class="rounded-xl border border-slate-200/90 bg-slate-50/70 p-3.5 shadow-2xs space-y-1.5">
+                              <div class="flex items-center gap-1.5 flex-wrap">
+                                ${formatNoteRecipientsBadge(note)}
+                                <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700">${escapeHTML(formatPublishedBadge(note.date, note.time))}</span>
+                                <span class="text-[11px] text-slate-500">da <strong>${escapeHTML(note.authorRole)}</strong></span>
+                              </div>
+                              <p class="text-sm text-slate-800 leading-relaxed">${escapeHTML(note.text)}</p>
+                            </div>
+                          `
+                        )
+                        .join("")
+                }
+              </div>
+            </div>
+          </div>
+        `;
+      }
 
       return `
         <div>
@@ -2261,7 +2344,7 @@
               <div class="flex items-center justify-between gap-2">
                 <div>
                   <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Cambi Camera</h3>
-                  <p class="text-xs text-slate-500">Avvisi immediati per Ricevimento, Governante, Sala e Manutenzione</p>
+                  <p class="text-xs text-slate-500">Avvisi immediati per Ricevimento, Governante e Sala</p>
                 </div>
                 <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-teal-100 text-teal-900 border border-teal-200">${dayRoomChanges.length} cambi</span>
               </div>
