@@ -9,7 +9,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <style>
-    /* Tipografia e animazioni per interazioni rapide su desktop e mobile */
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
@@ -36,10 +35,8 @@
 <body class="bg-gradient-to-br from-amber-50/70 via-slate-100 to-sky-50/70 text-slate-900 min-h-screen antialiased selection:bg-amber-200 selection:text-slate-950">
   <div id="app" class="min-h-screen flex flex-col"></div>
 
-  <!-- Contenitore notifiche toast non bloccanti -->
   <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full px-4 sm:px-0"></div>
 
-  <!-- Modulo sincronizzazione in tempo reale tra dispositivi -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
@@ -53,6 +50,7 @@
     let cloudAuth = null;
     let cloudUser = null;
     let cloudReady = false;
+    let cloudErrorState = false;
     let isApplyingRemoteSync = false;
     let lastAppliedRemoteUpdatedAt = 0;
     let lastRemoteEventLabel = "Solo Locale (No Cloud)";
@@ -69,6 +67,13 @@
       "complaints",
       "archiveEntries"
     ];
+
+    function setCloudBannerStatus(label, { ready = false, error = false } = {}) {
+      cloudReady = ready;
+      cloudErrorState = error;
+      lastRemoteEventLabel = label;
+      if (typeof render === "function") render();
+    }
 
     function extractSharedPayload(sourceObj) {
       const payload = {};
@@ -112,6 +117,8 @@
             second: "2-digit"
           });
           lastRemoteEventLabel = `Agg. ${timeStr} (${payload.updatedBy || "remoto"})`;
+          cloudReady = true;
+          cloudErrorState = false;
         }
 
         try {
@@ -153,10 +160,14 @@
           minute: "2-digit",
           second: "2-digit"
         });
-        lastRemoteEventLabel = `Agg. ${timeStr}`;
-        if (typeof render === "function") render();
+        setCloudBannerStatus(`Agg. ${timeStr}`, { ready: true, error: false });
       } catch (err) {
         console.warn("Scrittura cloud non riuscita:", err);
+        const isPerm = String(err?.code || "").includes("permission") || String(err?.message || "").includes("permission");
+        setCloudBannerStatus(isPerm ? "Permessi Cloud negati" : "Errore scrittura Cloud", {
+          ready: false,
+          error: true
+        });
       }
     }
 
@@ -170,6 +181,7 @@
         }
       } catch (err) {
         console.warn("Lettura cloud non riuscita:", err);
+        setCloudBannerStatus("Errore lettura Cloud", { ready: false, error: true });
       }
       return false;
     }
@@ -196,13 +208,15 @@
         }
 
         cloudUser = cloudAuth.currentUser;
-        if (!cloudUser) return;
-        cloudReady = true;
-        lastRemoteEventLabel = "Connesso al Cloud";
-        if (typeof render === "function") render();
+        if (!cloudUser) {
+          setCloudBannerStatus("Auth non attiva", { ready: false, error: true });
+          return;
+        }
 
         const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
         const snap = await getDoc(docRef);
+        setCloudBannerStatus("Connesso al Cloud", { ready: true, error: false });
+
         if (snap.exists()) {
           applySharedPayloadToState(snap.data());
           if (typeof render === "function") render();
@@ -221,12 +235,23 @@
           },
           (err) => {
             console.warn("Ascolto in tempo reale interrotto:", err);
-            lastRemoteEventLabel = "Errore Cloud";
-            if (typeof render === "function") render();
+            const isPerm = String(err?.code || "").includes("permission") || String(err?.message || "").includes("permission");
+            setCloudBannerStatus(isPerm ? "Permessi Cloud negati" : "Errore Cloud", {
+              ready: false,
+              error: true
+            });
           }
         );
       } catch (err) {
         console.warn("Modalità locale attiva:", err);
+        const codeStr = String(err?.code || err?.message || "");
+        if (codeStr.includes("admin-restricted-operation") || codeStr.includes("operation-not-allowed")) {
+          setCloudBannerStatus("Abilita Auth Anonimo", { ready: false, error: true });
+        } else if (codeStr.includes("permission")) {
+          setCloudBannerStatus("Permessi Cloud negati", { ready: false, error: true });
+        } else {
+          setCloudBannerStatus("Solo Locale (No Cloud)", { ready: false, error: false });
+        }
       }
     }
 
@@ -234,6 +259,7 @@
       isActive: () => cloudReady,
       getStatus: () => ({
         ready: cloudReady,
+        error: cloudErrorState,
         label: lastRemoteEventLabel,
         lastUpdatedAt: lastAppliedRemoteUpdatedAt
       }),
@@ -1241,7 +1267,6 @@
         showToast(`Segnalazione: ${cmp.status}`);
       },
 
-      // Apri cartella d'archivio con un clic, chiudi con un secondo clic sullo stesso riquadro
       toggleArchiveFolderTile(catId) {
         if (state.archiveFilterCategory === catId) {
           state.archiveFilterCategory = null;
@@ -1441,7 +1466,19 @@
       const role = getCurrentRoleObj();
       const syncStatus = window.__cloudSync && typeof window.__cloudSync.getStatus === "function"
         ? window.__cloudSync.getStatus()
-        : { ready: false, label: "Solo Locale (No Cloud)" };
+        : { ready: false, error: false, label: "Solo Locale (No Cloud)" };
+
+      const syncBadgeClass = syncStatus.ready
+        ? "bg-emerald-100 text-emerald-900 border-emerald-300"
+        : syncStatus.error
+        ? "bg-rose-100 text-rose-900 border-rose-300"
+        : "bg-amber-100 text-amber-950 border-amber-300";
+
+      const syncDotClass = syncStatus.ready
+        ? "bg-emerald-600"
+        : syncStatus.error
+        ? "bg-rose-600"
+        : "bg-amber-600";
 
       const scopeBadge = isDirectorOrVice()
         ? `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-950 border border-amber-300">Visione Globale • Tutti i Reparti</span>`
@@ -1484,16 +1521,12 @@
                 <input id="global-date" type="date" value="${escapeHTML(state.selectedDate)}" onchange="actions.setDate(this.value)" class="bg-transparent text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none cursor-pointer" />
               </div>
 
-              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
-                syncStatus.ready
-                  ? "bg-emerald-100 text-emerald-900 border-emerald-300"
-                  : "bg-amber-100 text-amber-950 border-amber-300"
-              }">
-                <span class="w-2 h-2 rounded-full ${syncStatus.ready ? "bg-emerald-600" : "bg-amber-600"}"></span>
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border ${syncBadgeClass}">
+                <span class="w-2 h-2 rounded-full ${syncDotClass}"></span>
                 <span>${escapeHTML(syncStatus.label)}</span>
               </span>
 
-              <button onclick="actions.manualSyncNow()" title="Aggiorna dati" class="press-btn inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-950 text-xs font-bold">
+              <button onclick="actions.manualSyncNow()" title="Aggiorna dati" class="press-btn inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold">
                 <span>↻ Sincronizza</span>
               </button>
 
