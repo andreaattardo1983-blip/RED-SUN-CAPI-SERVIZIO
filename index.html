@@ -52,6 +52,7 @@
     let cloudReady = false;
     let cloudErrorState = false;
     let isApplyingRemoteSync = false;
+    let unsubscribeSnapshot = null;
     let lastAppliedRemoteUpdatedAt = 0;
     let lastRemoteEventLabel = "Solo Locale (No Cloud)";
 
@@ -141,7 +142,7 @@
     }
 
     async function pushSharedStateToCloud() {
-      if (!cloudReady || !cloudDb || !cloudUser || isApplyingRemoteSync || typeof state === "undefined") return;
+      if (!cloudReady || !cloudDb || isApplyingRemoteSync || typeof state === "undefined") return;
       try {
         const nowTs = Date.now();
         lastAppliedRemoteUpdatedAt = nowTs;
@@ -163,8 +164,8 @@
         setCloudBannerStatus(`Agg. ${timeStr}`, { ready: true, error: false });
       } catch (err) {
         console.warn("Scrittura cloud non riuscita:", err);
-        const isPerm = String(err?.code || "").includes("permission") || String(err?.message || "").includes("permission");
-        setCloudBannerStatus(isPerm ? "Permessi Cloud negati" : "Errore scrittura Cloud", {
+        const codeText = String(err?.code || err?.message || "errore");
+        setCloudBannerStatus(`No Cloud (${codeText})`, {
           ready: false,
           error: true
         });
@@ -172,7 +173,7 @@
     }
 
     async function pullLatestFromCloud() {
-      if (!cloudReady || !cloudDb || !cloudUser) return false;
+      if (!cloudReady || !cloudDb) return false;
       try {
         const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
         const snap = await getDoc(docRef);
@@ -181,9 +182,33 @@
         }
       } catch (err) {
         console.warn("Lettura cloud non riuscita:", err);
-        setCloudBannerStatus("Errore lettura Cloud", { ready: false, error: true });
+        const codeText = String(err?.code || err?.message || "errore");
+        setCloudBannerStatus(`No Cloud (${codeText})`, { ready: false, error: true });
       }
       return false;
+    }
+
+    async function attachRealtimeListener() {
+      if (!cloudDb || unsubscribeSnapshot) return;
+      const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
+      unsubscribeSnapshot = onSnapshot(
+        docRef,
+        (snapshot) => {
+          if (!snapshot.exists() || isApplyingRemoteSync) return;
+          const changed = applySharedPayloadToState(snapshot.data());
+          if (changed && typeof render === "function") {
+            render();
+          }
+        },
+        (err) => {
+          console.warn("Ascolto in tempo reale interrotto:", err);
+          const codeText = String(err?.code || err?.message || "errore");
+          setCloudBannerStatus(`No Cloud (${codeText})`, {
+            ready: false,
+            error: true
+          });
+        }
+      );
     }
 
     async function initCloudSync() {
@@ -208,11 +233,6 @@
         }
 
         cloudUser = cloudAuth.currentUser;
-        if (!cloudUser) {
-          setCloudBannerStatus("Auth non attiva", { ready: false, error: true });
-          return;
-        }
-
         const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
         const snap = await getDoc(docRef);
         setCloudBannerStatus("Connesso al Cloud", { ready: true, error: false });
@@ -224,34 +244,33 @@
           await pushSharedStateToCloud();
         }
 
-        onSnapshot(
-          docRef,
-          (snapshot) => {
-            if (!snapshot.exists() || isApplyingRemoteSync) return;
-            const changed = applySharedPayloadToState(snapshot.data());
-            if (changed && typeof render === "function") {
-              render();
-            }
-          },
-          (err) => {
-            console.warn("Ascolto in tempo reale interrotto:", err);
-            const isPerm = String(err?.code || "").includes("permission") || String(err?.message || "").includes("permission");
-            setCloudBannerStatus(isPerm ? "Permessi Cloud negati" : "Errore Cloud", {
-              ready: false,
-              error: true
-            });
-          }
-        );
+        await attachRealtimeListener();
       } catch (err) {
         console.warn("Modalità locale attiva:", err);
-        const codeStr = String(err?.code || err?.message || "");
-        if (codeStr.includes("admin-restricted-operation") || codeStr.includes("operation-not-allowed")) {
-          setCloudBannerStatus("Abilita Auth Anonimo", { ready: false, error: true });
-        } else if (codeStr.includes("permission")) {
-          setCloudBannerStatus("Permessi Cloud negati", { ready: false, error: true });
-        } else {
-          setCloudBannerStatus("Solo Locale (No Cloud)", { ready: false, error: false });
+        const errCode = String(err?.code || "");
+        const errMsg = String(err?.message || "");
+        const shortDetail = errCode || errMsg.slice(0, 42) || "No Cloud";
+
+        // Tentativo di fallback diretto su Firestore se l'auth non blocca il database
+        if (cloudDb) {
+          try {
+            const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
+            const fallbackSnap = await getDoc(docRef);
+            setCloudBannerStatus("Connesso al Cloud", { ready: true, error: false });
+            if (fallbackSnap.exists()) {
+              applySharedPayloadToState(fallbackSnap.data());
+              if (typeof render === "function") render();
+            } else {
+              await pushSharedStateToCloud();
+            }
+            await attachRealtimeListener();
+            return;
+          } catch (_) {
+            // Resta in stato diagnostico chiaro
+          }
         }
+
+        setCloudBannerStatus(`No Cloud (${shortDetail})`, { ready: false, error: true });
       }
     }
 
@@ -264,7 +283,8 @@
         lastUpdatedAt: lastAppliedRemoteUpdatedAt
       }),
       push: pushSharedStateToCloud,
-      pullLatest: pullLatestFromCloud
+      pullLatest: pullLatestFromCloud,
+      reconnect: initCloudSync
     };
 
     initCloudSync();
@@ -679,11 +699,17 @@
 
       async manualSyncNow() {
         syncSharedStateFromStorage();
-        if (window.__cloudSync && typeof window.__cloudSync.pullLatest === "function") {
-          await window.__cloudSync.pullLatest();
-        }
-        if (window.__cloudSync && typeof window.__cloudSync.push === "function") {
-          await window.__cloudSync.push();
+        if (window.__cloudSync) {
+          if (!window.__cloudSync.isActive() && typeof window.__cloudSync.reconnect === "function") {
+            await window.__cloudSync.reconnect();
+          } else {
+            if (typeof window.__cloudSync.pullLatest === "function") {
+              await window.__cloudSync.pullLatest();
+            }
+            if (typeof window.__cloudSync.push === "function") {
+              await window.__cloudSync.push();
+            }
+          }
         }
         render();
         showToast("Sincronizzazione completata");
