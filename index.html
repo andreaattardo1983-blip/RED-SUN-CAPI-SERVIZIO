@@ -363,3 +363,2360 @@
         { id: "st_3", name: "Antonio Conti", role: "Maître di Sala", deptId: "sala" },
         { id: "st_4", name: "Elena Ferrari", role: "Chef de Rang", deptId: "sala" },
         { id: "st_5", name: "Lorenzo Greco", role: "Executive Chef", deptId: "cucina" },
+        { id: "st_6", name: "Sofia Rinaldi", role: "Capo Governante", deptId: "governante" },
+        { id: "st_7", name: "Davide Lombardi", role: "Addetto Manutenzione", deptId: "manutenzione" }
+      ],
+      monthlyAttendance: {},
+      serviceNotes: [],
+      mealMovements: {},
+      intoleranceNotices: [],
+      roomChangeNotices: [],
+      maintenanceTickets: [],
+      complaints: [],
+      archiveEntries: []
+    };
+
+    const state = JSON.parse(JSON.stringify(DEFAULT_STATE));
+
+    function loadInitialState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return;
+        Object.keys(DEFAULT_STATE).forEach((k) => {
+          if (parsed[k] !== undefined) {
+            state[k] = parsed[k];
+          }
+        });
+        if (!state.selectedDate) state.selectedDate = getTodayISO();
+        if (!state.selectedMonth) state.selectedMonth = state.selectedDate.slice(0, 7);
+        if (!Array.isArray(state.noteSelectedDeptIds)) {
+          state.noteSelectedDeptIds = DEPARTMENTS.map((d) => d.id);
+        }
+      } catch (err) {
+        console.warn("Errore lettura stato locale:", err);
+      }
+    }
+
+    function saveState() {
+      try {
+        const {
+          pendingRoleId,
+          passwordDraft,
+          passwordError,
+          loginPasswordDraft,
+          loginError,
+          ...persistable
+        } = state;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
+      } catch (err) {
+        console.warn("Errore salvataggio stato locale:", err);
+      }
+      if (window.__cloudSync && typeof window.__cloudSync.push === "function") {
+        window.__cloudSync.push();
+      }
+    }
+
+    function syncSharedStateFromStorage() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        [
+          "sectorCredentials",
+          "staff",
+          "monthlyAttendance",
+          "serviceNotes",
+          "mealMovements",
+          "intoleranceNotices",
+          "roomChangeNotices",
+          "maintenanceTickets",
+          "complaints",
+          "archiveEntries"
+        ].forEach((key) => {
+          if (parsed[key] !== undefined) {
+            state[key] = parsed[key];
+          }
+        });
+      } catch (err) {
+        console.warn("Sync da storage fallita:", err);
+      }
+    }
+
+    loadInitialState();
+
+    function getCurrentRoleObj() {
+      return ROLES.find((r) => r.id === state.activeRole) || ROLES[0];
+    }
+
+    function getDepartmentObj(deptId) {
+      return DEPARTMENTS.find((d) => d.id === deptId) || DEPARTMENTS[0];
+    }
+
+    function isDirectorOrVice() {
+      return state.activeRole === "director" || state.activeRole === "vice_director";
+    }
+
+    function isMaintenanceRole() {
+      return state.activeRole === "manutenzione";
+    }
+
+    function getRoleSectorKey(roleId) {
+      const r = ROLES.find((item) => item.id === roleId);
+      if (!r) return "director";
+      if (roleId === "director" || roleId === "vice_director") return roleId;
+      return r.deptId;
+    }
+
+    function getSectorCredential(sectorKey) {
+      const entry = state.sectorCredentials?.[sectorKey];
+      if (typeof entry === "string") {
+        return { username: sectorKey, password: entry };
+      }
+      return {
+        username: entry?.username || sectorKey,
+        password: entry?.password || ""
+      };
+    }
+
+    function getSectorUsername(sectorKey) {
+      return getSectorCredential(sectorKey).username;
+    }
+
+    function getSectorPassword(sectorKey) {
+      return getSectorCredential(sectorKey).password;
+    }
+
+    function getDaysInMonth(ym) {
+      if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return 30;
+      const [y, m] = ym.split("-").map(Number);
+      return new Date(y, m, 0).getDate();
+    }
+
+    function getVisibleStaff() {
+      if (isDirectorOrVice()) return state.staff;
+      const roleDept = getCurrentRoleObj().deptId;
+      return state.staff.filter((s) => s.deptId === roleDept);
+    }
+
+    function getAttendanceMeta(code) {
+      return ATTENDANCE_CODES.find((c) => c.code === code) || ATTENDANCE_CODES[5];
+    }
+
+    function getMealRecordForSelectedDate() {
+      const d = state.selectedDate;
+      if (!state.mealMovements[d]) {
+        state.mealMovements[d] = {
+          breakfast: 0,
+          lunch: 0,
+          dinner: 0,
+          packetLunch: []
+        };
+      }
+      if (!Array.isArray(state.mealMovements[d].packetLunch)) {
+        state.mealMovements[d].packetLunch = [];
+      }
+      return state.mealMovements[d];
+    }
+
+    function getVisibleNotes() {
+      const dayNotes = (state.serviceNotes || []).filter((n) => n.date === state.selectedDate);
+      if (isDirectorOrVice()) return dayNotes;
+      const myDept = getCurrentRoleObj().deptId;
+      return dayNotes.filter((n) => {
+        const targets = Array.isArray(n.targetDeptIds) ? n.targetDeptIds : [n.deptId];
+        return targets.includes("all") || targets.includes(myDept);
+      });
+    }
+
+    function formatPublishedBadge(dateStr, timeStr) {
+      return `${dateStr || state.selectedDate} • ${timeStr || "--:--"}`;
+    }
+
+    function formatNoteRecipientsBadge(note) {
+      const targets = Array.isArray(note.targetDeptIds) ? note.targetDeptIds : [note.deptId];
+      if (targets.includes("all")) {
+        return `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-300">Tutti i reparti</span>`;
+      }
+      return targets
+        .map((id) => {
+          const d = getDepartmentObj(id);
+          return `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full border ${d.badgeClass}">${escapeHTML(d.name)}</span>`;
+        })
+        .join(" ");
+    }
+
+    function isEntryArchived(sourceRef) {
+      return (state.archiveEntries || []).some((a) => a.sourceRef === sourceRef);
+    }
+
+    function pushUniqueArchiveEntry(entry) {
+      if (!Array.isArray(state.archiveEntries)) state.archiveEntries = [];
+      if (entry.sourceRef && isEntryArchived(entry.sourceRef)) return;
+      state.archiveEntries.unshift({
+        id: `arc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        ...entry
+      });
+    }
+
+    function computeDailyKPIs() {
+      const ym = state.selectedMonth;
+      const dayNum = Number((state.selectedDate || "").split("-")[2] || 1);
+      const visibleStaff = getVisibleStaff();
+      let presentCount = 0;
+      visibleStaff.forEach((m) => {
+        const code = state.monthlyAttendance[`${ym}__${m.id}__${dayNum}`];
+        if (code === "P") presentCount++;
+      });
+
+      const rec = getMealRecordForSelectedDate();
+      const totalMeals = Number(rec.breakfast || 0) + Number(rec.lunch || 0) + Number(rec.dinner || 0);
+      const packetCount = Array.isArray(rec.packetLunch)
+        ? rec.packetLunch.reduce((acc, item) => acc + Number(item.count || 0), 0)
+        : 0;
+      const openMaintenance = (state.maintenanceTickets || []).filter((t) => t.status !== "Completata").length;
+
+      return {
+        presentCount,
+        totalStaff: visibleStaff.length,
+        totalMeals,
+        packetCount,
+        openMaintenance
+      };
+    }
+
+    const actions = {
+      setLoginUsernameDraft(val) {
+        state.loginUsernameDraft = val;
+        if (state.loginError) state.loginError = "";
+      },
+
+      setLoginPasswordDraft(val) {
+        state.loginPasswordDraft = val;
+        if (state.loginError) state.loginError = "";
+      },
+
+      async submitInitialLogin(event) {
+        event.preventDefault();
+        syncSharedStateFromStorage();
+        if (window.__cloudSync && typeof window.__cloudSync.pullLatest === "function") {
+          await window.__cloudSync.pullLatest();
+        }
+        const userInput = (state.loginUsernameDraft || "").trim().toLowerCase();
+        const passInput = state.loginPasswordDraft || "";
+        if (!userInput) {
+          state.loginError = "Inserisci il nome utente del settore.";
+          render();
+          return;
+        }
+
+        const matchedRole = ROLES.find((r) => {
+          const secKey = getRoleSectorKey(r.id);
+          const cred = getSectorCredential(secKey);
+          return (cred.username || "").trim().toLowerCase() === userInput;
+        });
+
+        if (!matchedRole) {
+          state.loginError = "Nome utente non riconosciuto.";
+          render();
+          return;
+        }
+
+        const secKey = getRoleSectorKey(matchedRole.id);
+        const expectedPass = getSectorPassword(secKey);
+        if (expectedPass && passInput !== expectedPass) {
+          state.loginError = "Password non corretta per questo utente.";
+          render();
+          return;
+        }
+
+        state.activeRole = matchedRole.id;
+        state.activeSection = null;
+        state.isAuthenticated = true;
+        state.loginPasswordDraft = "";
+        state.loginError = "";
+        saveState();
+        render();
+        showToast(`Benvenuto: ${matchedRole.label}`);
+      },
+
+      openSection(sectionId) {
+        state.activeSection = sectionId;
+        render();
+      },
+
+      goHome() {
+        state.activeSection = null;
+        render();
+      },
+
+      async manualSyncNow() {
+        syncSharedStateFromStorage();
+        if (window.__cloudSync && typeof window.__cloudSync.pullLatest === "function") {
+          await window.__cloudSync.pullLatest();
+        }
+        if (window.__cloudSync && typeof window.__cloudSync.push === "function") {
+          await window.__cloudSync.push();
+        }
+        render();
+        showToast("Sincronizzazione completata");
+      },
+
+      logout() {
+        state.isAuthenticated = false;
+        state.activeSection = null;
+        state.loginUsernameDraft = "";
+        state.loginPasswordDraft = "";
+        state.loginError = "";
+        state.pendingRoleId = null;
+        state.passwordDraft = "";
+        state.passwordError = "";
+        saveState();
+        render();
+      },
+
+      async requestRoleChange(newRoleId) {
+        if (newRoleId === state.activeRole) return;
+        syncSharedStateFromStorage();
+        if (window.__cloudSync && typeof window.__cloudSync.pullLatest === "function") {
+          await window.__cloudSync.pullLatest();
+        }
+        const sectorKey = getRoleSectorKey(newRoleId);
+        const expectedPass = getSectorPassword(sectorKey);
+        if (!expectedPass) {
+          state.activeRole = newRoleId;
+          state.activeSection = null;
+          state.pendingRoleId = null;
+          state.passwordDraft = "";
+          state.passwordError = "";
+          saveState();
+          render();
+          showToast(`Profilo attivo: ${getCurrentRoleObj().label}`);
+          return;
+        }
+        state.pendingRoleId = newRoleId;
+        state.passwordDraft = "";
+        state.passwordError = "";
+        render();
+      },
+
+      cancelRoleChange() {
+        state.pendingRoleId = null;
+        state.passwordDraft = "";
+        state.passwordError = "";
+        render();
+      },
+
+      setPasswordDraft(val) {
+        state.passwordDraft = val;
+        if (state.passwordError) {
+          state.passwordError = "";
+        }
+      },
+
+      async confirmRoleChange(event) {
+        event.preventDefault();
+        if (!state.pendingRoleId) return;
+        syncSharedStateFromStorage();
+        if (window.__cloudSync && typeof window.__cloudSync.pullLatest === "function") {
+          await window.__cloudSync.pullLatest();
+        }
+        const sectorKey = getRoleSectorKey(state.pendingRoleId);
+        const expectedPass = getSectorPassword(sectorKey);
+        if (state.passwordDraft === expectedPass) {
+          state.activeRole = state.pendingRoleId;
+          state.activeSection = null;
+          state.pendingRoleId = null;
+          state.passwordDraft = "";
+          state.passwordError = "";
+          saveState();
+          render();
+          showToast(`Accesso confermato: ${getCurrentRoleObj().label}`);
+        } else {
+          state.passwordError = "Password non corretta per questo settore. Riprova.";
+          render();
+        }
+      },
+
+      setCredentialDraft(sectorKey, field, val) {
+        const currentCred = getSectorCredential(sectorKey);
+        const existingDraft = state.credentialDraftsByKey[sectorKey] || {
+          username: currentCred.username,
+          password: currentCred.password
+        };
+        state.credentialDraftsByKey[sectorKey] = {
+          ...existingDraft,
+          [field]: val
+        };
+      },
+
+      saveSectorCredential(sectorKey) {
+        if (!isDirectorOrVice()) return;
+        const currentCred = getSectorCredential(sectorKey);
+        const draft = state.credentialDraftsByKey[sectorKey] || currentCred;
+        const cleanUser = (draft.username || "").trim();
+        const cleanPass = (draft.password || "").trim();
+        if (!cleanUser) {
+          showToast("Il nome utente non può essere vuoto", "warning");
+          return;
+        }
+        const duplicate = Object.entries(state.sectorCredentials || {}).some(([k, v]) => {
+          if (k === sectorKey) return false;
+          const u = typeof v === "string" ? k : v?.username || k;
+          return u.trim().toLowerCase() === cleanUser.toLowerCase();
+        });
+        if (duplicate) {
+          showToast("Questo nome utente è già usato da un altro settore", "warning");
+          return;
+        }
+        state.sectorCredentials[sectorKey] = {
+          username: cleanUser,
+          password: cleanPass
+        };
+        delete state.credentialDraftsByKey[sectorKey];
+        saveState();
+        render();
+        showToast(
+          cleanPass
+            ? `Credenziali salvate per "${cleanUser}" (con password)`
+            : `Utente "${cleanUser}" salvato senza password`
+        );
+      },
+
+      clearSectorPassword(sectorKey) {
+        if (!isDirectorOrVice()) return;
+        const currentCred = getSectorCredential(sectorKey);
+        state.sectorCredentials[sectorKey] = {
+          username: currentCred.username,
+          password: ""
+        };
+        delete state.credentialDraftsByKey[sectorKey];
+        saveState();
+        render();
+        showToast("Password rimossa per questo settore");
+      },
+
+      setDate(newDate) {
+        if (!newDate) return;
+        state.selectedDate = newDate;
+        state.selectedMonth = newDate.slice(0, 7);
+        saveState();
+        render();
+      },
+
+      setMonth(newMonth) {
+        if (!newMonth) return;
+        state.selectedMonth = newMonth;
+        if (!state.selectedDate.startsWith(newMonth)) {
+          state.selectedDate = `${newMonth}-01`;
+        }
+        saveState();
+        render();
+      },
+
+      toggleEditAttendance() {
+        state.editAttendanceMode = !state.editAttendanceMode;
+        render();
+      },
+
+      setBrushCode(code) {
+        state.selectedBrushCode = code;
+        state.editAttendanceMode = true;
+        render();
+      },
+
+      applyAttendanceCell(staffId, dayNum) {
+        if (!state.editAttendanceMode) return;
+        const key = `${state.selectedMonth}__${staffId}__${dayNum}`;
+        if (state.selectedBrushCode === ".") {
+          delete state.monthlyAttendance[key];
+        } else {
+          state.monthlyAttendance[key] = state.selectedBrushCode;
+        }
+        state.lastSelectedCell = { staffId, dayNum };
+        saveState();
+        render();
+      },
+
+      fillColumnForDay(dayNum) {
+        if (!state.editAttendanceMode) {
+          showToast("Attiva prima la modalità Modifica presenze", "warning");
+          return;
+        }
+        const visibleStaff = getVisibleStaff();
+        visibleStaff.forEach((member) => {
+          const key = `${state.selectedMonth}__${member.id}__${dayNum}`;
+          if (state.selectedBrushCode === ".") {
+            delete state.monthlyAttendance[key];
+          } else {
+            state.monthlyAttendance[key] = state.selectedBrushCode;
+          }
+        });
+        saveState();
+        render();
+        showToast(`Giorno ${dayNum} aggiornato con "${state.selectedBrushCode}"`);
+      },
+
+      addStaffMember(event) {
+        event.preventDefault();
+        if (!isDirectorOrVice()) {
+          showToast("Solo Direttore e Vice Direttore possono inserire personale", "warning");
+          return;
+        }
+        const form = event.target;
+        const name = form.staffName.value.trim();
+        const roleTitle = form.staffRole.value.trim();
+        const deptId = form.staffDept.value || "ricevimento";
+        if (!name || !roleTitle) {
+          showToast("Inserisci nome e qualifica del collaboratore", "warning");
+          return;
+        }
+        const newId = `st_${Date.now()}`;
+        state.staff.push({ id: newId, name, role: roleTitle, deptId });
+        form.reset();
+        saveState();
+        render();
+        showToast(`${name} aggiunto a ${getDepartmentObj(deptId).name}`);
+      },
+
+      removeStaffMember(staffId) {
+        if (!isDirectorOrVice()) {
+          showToast("Solo Direttore e Vice Direttore possono eliminare personale", "warning");
+          return;
+        }
+        const member = state.staff.find((s) => s.id === staffId);
+        if (!member) return;
+        state.staff = state.staff.filter((s) => s.id !== staffId);
+        Object.keys(state.monthlyAttendance || {}).forEach((k) => {
+          if (k.includes(`__${staffId}__`)) {
+            delete state.monthlyAttendance[k];
+          }
+        });
+        saveState();
+        render();
+        showToast(`${member.name} rimosso dall'organico`);
+      },
+
+      toggleNoteAllDepts(checked) {
+        state.noteSelectAllDepts = Boolean(checked);
+        if (state.noteSelectAllDepts) {
+          state.noteSelectedDeptIds = DEPARTMENTS.map((d) => d.id);
+        }
+        render();
+      },
+
+      toggleNoteDeptSelection(deptId) {
+        state.noteSelectAllDepts = false;
+        const current = new Set(state.noteSelectedDeptIds || []);
+        if (current.has(deptId)) {
+          current.delete(deptId);
+        } else {
+          current.add(deptId);
+        }
+        state.noteSelectedDeptIds = Array.from(current);
+        render();
+      },
+
+      addServiceNote(event) {
+        event.preventDefault();
+        const form = event.target;
+        const text = form.noteText.value.trim();
+        if (!text) return;
+
+        let targetDeptIds = ["all"];
+        if (isDirectorOrVice()) {
+          if (state.noteSelectAllDepts) {
+            targetDeptIds = ["all"];
+          } else {
+            const chosen = (state.noteSelectedDeptIds || []).filter((id) =>
+              DEPARTMENTS.some((d) => d.id === id)
+            );
+            if (chosen.length === 0) {
+              showToast("Seleziona almeno un reparto destinatario", "warning");
+              return;
+            }
+            targetDeptIds = chosen.length === DEPARTMENTS.length ? ["all"] : chosen;
+          }
+        } else {
+          const singleDept = getCurrentRoleObj().deptId || "ricevimento";
+          targetDeptIds = [singleDept];
+        }
+
+        const nowTime = getCurrentTimeHHMM();
+        const noteId = `note_${Date.now()}`;
+        const author = getCurrentRoleObj().label;
+        const recipientNames = targetDeptIds.includes("all")
+          ? "Tutti i reparti"
+          : targetDeptIds.map((id) => getDepartmentObj(id).name).join(", ");
+
+        state.serviceNotes.unshift({
+          id: noteId,
+          date: state.selectedDate,
+          time: nowTime,
+          deptId: targetDeptIds[0],
+          targetDeptIds,
+          authorRole: author,
+          text
+        });
+
+        pushUniqueArchiveEntry({
+          sourceRef: `note:${noteId}`,
+          category: "ordini_servizio",
+          title: `Nota / Ordine di Servizio (${recipientNames})`,
+          detail: text,
+          date: state.selectedDate,
+          time: nowTime,
+          authorRole: author
+        });
+
+        form.reset();
+        saveState();
+        render();
+        showToast("Nota pubblicata e salvata nell'archivio Direzione");
+      },
+
+      deleteServiceNote(noteId) {
+        state.serviceNotes = state.serviceNotes.filter((n) => n.id !== noteId);
+        saveState();
+        render();
+        showToast("Nota rimossa");
+      },
+
+      updateMealCount(field, rawValue) {
+        const rec = getMealRecordForSelectedDate();
+        rec[field] = Math.max(0, parseInt(rawValue, 10) || 0);
+        const nowTime = getCurrentTimeHHMM();
+        const total = Number(rec.breakfast || 0) + Number(rec.lunch || 0) + Number(rec.dinner || 0);
+        const packetTotal = Array.isArray(rec.packetLunch)
+          ? rec.packetLunch.reduce((acc, item) => acc + Number(item.count || 0), 0)
+          : 0;
+        const sourceRef = `meal_mov:${state.selectedDate}`;
+        const detailText = `Colazioni: ${rec.breakfast} • Pranzi: ${rec.lunch} • Cene: ${rec.dinner} (Totale pasti: ${total} • Packet Lunch: ${packetTotal})`;
+        const existingIdx = (state.archiveEntries || []).findIndex((a) => a.sourceRef === sourceRef);
+        if (existingIdx >= 0) {
+          state.archiveEntries[existingIdx] = {
+            ...state.archiveEntries[existingIdx],
+            time: nowTime,
+            detail: detailText,
+            authorRole: getCurrentRoleObj().label
+          };
+        } else {
+          pushUniqueArchiveEntry({
+            sourceRef,
+            category: "movimento_pasti",
+            title: `Movimento Pasti (${state.selectedDate})`,
+            detail: detailText,
+            date: state.selectedDate,
+            time: nowTime,
+            authorRole: getCurrentRoleObj().label
+          });
+        }
+        saveState();
+        render();
+      },
+
+      addIntoleranceNotice(event) {
+        event.preventDefault();
+        const form = event.target;
+        const room = form.intRoom.value.trim();
+        const detail = form.intDetail.value.trim();
+        if (!room || !detail) {
+          showToast("Inserisci numero camera e dettaglio intolleranza", "warning");
+          return;
+        }
+        const nowTime = getCurrentTimeHHMM();
+        const intId = `int_${Date.now()}`;
+        const author = getCurrentRoleObj().label;
+        state.intoleranceNotices.unshift({
+          id: intId,
+          date: state.selectedDate,
+          time: nowTime,
+          room,
+          detail,
+          authorRole: author
+        });
+        pushUniqueArchiveEntry({
+          sourceRef: `int:${intId}`,
+          category: "pasti_intolleranze",
+          title: `Intolleranza Cam. ${room}`,
+          detail,
+          date: state.selectedDate,
+          time: nowTime,
+          authorRole: author
+        });
+        form.reset();
+        saveState();
+        render();
+        showToast("Avviso intolleranza salvato e archiviato");
+      },
+
+      deleteIntoleranceNotice(id) {
+        state.intoleranceNotices = state.intoleranceNotices.filter((item) => item.id !== id);
+        saveState();
+        render();
+        showToast("Avviso intolleranza rimosso");
+      },
+
+      addRoomChangeNotice(event) {
+        event.preventDefault();
+        const form = event.target;
+        const fromRoom = form.fromRoom.value.trim();
+        const toRoom = form.toRoom.value.trim();
+        const note = form.roomChangeNote.value.trim();
+        if (!fromRoom || !toRoom) {
+          showToast("Inserisci sia la camera attuale sia la nuova camera", "warning");
+          return;
+        }
+        const nowTime = getCurrentTimeHHMM();
+        const rcId = `rc_${Date.now()}`;
+        const author = getCurrentRoleObj().label;
+        state.roomChangeNotices.unshift({
+          id: rcId,
+          date: state.selectedDate,
+          time: nowTime,
+          fromRoom,
+          toRoom,
+          note: note || "Cambio camera registrato",
+          authorRole: author
+        });
+        pushUniqueArchiveEntry({
+          sourceRef: `rc:${rcId}`,
+          category: "cambi_camera",
+          title: `Cambio Cam. ${fromRoom} → Cam. ${toRoom}`,
+          detail: note || "Cambio camera registrato",
+          date: state.selectedDate,
+          time: nowTime,
+          authorRole: author
+        });
+        form.reset();
+        saveState();
+        render();
+        showToast("Cambio camera comunicato e salvato in archivio");
+      },
+
+      deleteRoomChangeNotice(id) {
+        state.roomChangeNotices = state.roomChangeNotices.filter((item) => item.id !== id);
+        saveState();
+        render();
+        showToast("Avviso cambio camera rimosso");
+      },
+
+      addPacketLunch(event) {
+        event.preventDefault();
+        const form = event.target;
+        const room = form.plRoom.value.trim();
+        const diet = form.plDiet.value;
+        const count = Math.max(1, parseInt(form.plCount.value, 10) || 1);
+        if (!room) {
+          showToast("Inserisci il numero di camera", "warning");
+          return;
+        }
+        const rec = getMealRecordForSelectedDate();
+        const plId = `pl_${Date.now()}`;
+        const nowTime = getCurrentTimeHHMM();
+        rec.packetLunch.push({
+          id: plId,
+          room,
+          diet,
+          count
+        });
+        pushUniqueArchiveEntry({
+          sourceRef: `pl:${plId}`,
+          category: "movimento_pasti",
+          title: `Packet Lunch Cam. ${room} (${count}x)`,
+          detail: `Tipologia dieta: ${diet}`,
+          date: state.selectedDate,
+          time: nowTime,
+          authorRole: getCurrentRoleObj().label
+        });
+        form.reset();
+        saveState();
+        render();
+        showToast("Packet lunch aggiunto e archiviato");
+      },
+
+      removePacketLunch(plId) {
+        const rec = getMealRecordForSelectedDate();
+        rec.packetLunch = rec.packetLunch.filter((p) => p.id !== plId);
+        saveState();
+        render();
+      },
+
+      addMaintenanceTicket(event) {
+        event.preventDefault();
+        if (isMaintenanceRole()) {
+          showToast("I manutentori possono solo leggere e risolvere gli interventi", "warning");
+          return;
+        }
+        const form = event.target;
+        const roomOrArea = form.mntArea.value.trim();
+        const issue = form.mntIssue.value.trim();
+        if (!roomOrArea || !issue) return;
+        const nowTime = getCurrentTimeHHMM();
+        const mntId = `mnt_${Date.now()}`;
+        const author = getCurrentRoleObj().label;
+        state.maintenanceTickets.unshift({
+          id: mntId,
+          date: state.selectedDate,
+          time: nowTime,
+          roomOrArea,
+          issue,
+          status: "Aperta"
+        });
+        pushUniqueArchiveEntry({
+          sourceRef: `mnt:${mntId}`,
+          category: "manutenzione_ospiti",
+          title: `Manutenzione: ${roomOrArea}`,
+          detail: `${issue} — Stato: Aperta`,
+          date: state.selectedDate,
+          time: nowTime,
+          authorRole: author
+        });
+        form.reset();
+        saveState();
+        render();
+        showToast("Richiesta manutenzione registrata e archiviata");
+      },
+
+      cycleMaintenanceStatus(ticketId) {
+        const order = ["Aperta", "In corso", "Completata"];
+        const ticket = state.maintenanceTickets.find((t) => t.id === ticketId);
+        if (!ticket) return;
+        const nextIdx = (order.indexOf(ticket.status) + 1) % order.length;
+        ticket.status = order[nextIdx];
+        const archived = (state.archiveEntries || []).find((a) => a.sourceRef === `mnt:${ticketId}`);
+        if (archived) {
+          archived.detail = `${ticket.issue} — Stato: ${ticket.status}`;
+        }
+        saveState();
+        render();
+        showToast(`Stato manutenzione: ${ticket.status}`);
+      },
+
+      addComplaint(event) {
+        event.preventDefault();
+        const form = event.target;
+        const roomOrGuest = form.cmpRoom.value.trim();
+        const detail = form.cmpDetail.value.trim();
+        if (!roomOrGuest || !detail) return;
+        const nowTime = getCurrentTimeHHMM();
+        const cmpId = `cmp_${Date.now()}`;
+        const author = getCurrentRoleObj().label;
+        state.complaints.unshift({
+          id: cmpId,
+          date: state.selectedDate,
+          time: nowTime,
+          roomOrGuest,
+          detail,
+          status: "Aperta"
+        });
+        pushUniqueArchiveEntry({
+          sourceRef: `cmp:${cmpId}`,
+          category: "lamentela_clienti",
+          title: `Lamentela Cliente: ${roomOrGuest}`,
+          detail: `${detail} — Stato: Aperta`,
+          date: state.selectedDate,
+          time: nowTime,
+          authorRole: author
+        });
+        form.reset();
+        saveState();
+        render();
+        showToast("Lamentela cliente registrata e archiviata");
+      },
+
+      toggleComplaintStatus(cmpId) {
+        const cmp = state.complaints.find((c) => c.id === cmpId);
+        if (!cmp) return;
+        const order = ["Aperta", "In lavorazione", "Risolta"];
+        const currentIdx = order.indexOf(cmp.status);
+        cmp.status = order[(currentIdx + 1) % order.length];
+        const archived = (state.archiveEntries || []).find((a) => a.sourceRef === `cmp:${cmpId}`);
+        if (archived) {
+          archived.detail = `${cmp.detail} — Stato: ${cmp.status}`;
+        }
+        saveState();
+        render();
+        showToast(`Segnalazione: ${cmp.status}`);
+      },
+
+      // Apri cartella d'archivio con un clic, chiudi con un secondo clic sullo stesso riquadro
+      toggleArchiveFolderTile(catId) {
+        if (state.archiveFilterCategory === catId) {
+          state.archiveFilterCategory = null;
+        } else {
+          state.archiveFilterCategory = catId;
+        }
+        render();
+      },
+
+      setArchiveSearchQuery(val) {
+        state.archiveSearchQuery = val;
+        render();
+      },
+
+      setArchiveDateFilter(val) {
+        state.archiveDateFilter = val;
+        render();
+      },
+
+      resetArchiveFilters() {
+        state.archiveSearchQuery = "";
+        state.archiveDateFilter = "";
+        render();
+      },
+
+      quickArchiveFromItem(type, itemId) {
+        if (!isDirectorOrVice() || isArchivingInProgress) return;
+        const sourceRef = `${type}:${itemId}`;
+        if (isEntryArchived(sourceRef)) {
+          showToast("Elemento già presente in archivio", "warning");
+          return;
+        }
+        isArchivingInProgress = true;
+        try {
+          if (type === "note") {
+            const note = state.serviceNotes.find((n) => n.id === itemId);
+            if (!note) return;
+            pushUniqueArchiveEntry({
+              sourceRef,
+              category: "ordini_servizio",
+              title: `Ordine di Servizio (${note.authorRole})`,
+              detail: note.text,
+              date: note.date,
+              time: note.time || getCurrentTimeHHMM(),
+              authorRole: note.authorRole
+            });
+          } else if (type === "room_change") {
+            const rc = state.roomChangeNotices.find((r) => r.id === itemId);
+            if (!rc) return;
+            pushUniqueArchiveEntry({
+              sourceRef,
+              category: "cambi_camera",
+              title: `Cambio Cam. ${rc.fromRoom} → Cam. ${rc.toRoom}`,
+              detail: rc.note,
+              date: rc.date,
+              time: rc.time || getCurrentTimeHHMM(),
+              authorRole: rc.authorRole
+            });
+          } else if (type === "intolerance") {
+            const item = state.intoleranceNotices.find((i) => i.id === itemId);
+            if (!item) return;
+            pushUniqueArchiveEntry({
+              sourceRef,
+              category: "pasti_intolleranze",
+              title: `Intolleranza Cam. ${item.room}`,
+              detail: item.detail,
+              date: item.date,
+              time: item.time || getCurrentTimeHHMM(),
+              authorRole: item.authorRole
+            });
+          }
+          saveState();
+          render();
+          showToast("Salvato in Archivio Direzione");
+        } finally {
+          isArchivingInProgress = false;
+        }
+      },
+
+      deleteArchiveEntry(entryId) {
+        if (!isDirectorOrVice()) return;
+        state.archiveEntries = state.archiveEntries.filter((a) => a.id !== entryId);
+        saveState();
+        render();
+        showToast("Voce archivio rimossa");
+      }
+    };
+
+    function renderRoleLockModal() {
+      if (!state.pendingRoleId) return "";
+      const targetRole = ROLES.find((r) => r.id === state.pendingRoleId);
+      if (!targetRole) return "";
+      const sectorKey = getRoleSectorKey(targetRole.id);
+      const targetUser = getSectorUsername(sectorKey);
+
+      return `
+        <div class="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div class="bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-10 h-10 rounded-xl bg-amber-100 border border-amber-300 text-amber-900 flex items-center justify-center font-bold text-lg">🔒</div>
+              <div>
+                <h3 class="text-base font-bold text-slate-900">Accesso protetto da password</h3>
+                <p class="text-xs text-slate-500">Settore: <strong class="text-slate-800">${escapeHTML(targetRole.label)}</strong> (utente: <strong class="text-slate-700">${escapeHTML(targetUser)}</strong>)</p>
+              </div>
+            </div>
+            <form onsubmit="actions.confirmRoleChange(event)" class="space-y-4">
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1.5">Inserisci la password del settore</label>
+                <input
+                  id="role-password-input"
+                  type="password"
+                  value="${escapeHTML(state.passwordDraft)}"
+                  oninput="actions.setPasswordDraft(this.value)"
+                  placeholder="Password settore..."
+                  autofocus
+                  class="w-full rounded-xl border ${state.passwordError ? "border-rose-400 bg-rose-50/40" : "border-slate-300"} px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                ${
+                  state.passwordError
+                    ? `<p class="text-xs text-rose-600 font-semibold mt-1.5">${escapeHTML(state.passwordError)}</p>`
+                    : ""
+                }
+              </div>
+              <div class="flex items-center justify-end gap-2 pt-1">
+                <button type="button" onclick="actions.cancelRoleChange()" class="press-btn px-4 py-2 rounded-xl border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                  Annulla
+                </button>
+                <button type="submit" class="press-btn px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold shadow-xs">
+                  Sblocca settore
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderLoginScreen() {
+      return `
+        <div class="min-h-screen flex items-center justify-center p-4 sm:p-6">
+          <div class="bg-white border border-slate-200/90 rounded-3xl shadow-xl max-w-md w-full p-7 sm:p-8">
+            <div class="flex items-center gap-3.5 mb-6">
+              <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-700 text-white flex items-center justify-center font-extrabold text-xl shadow-md">
+                GH
+              </div>
+              <div>
+                <span class="text-[11px] font-bold uppercase tracking-widest text-amber-700">Area Riservata</span>
+                <h1 class="text-xl font-extrabold text-slate-900 tracking-tight">Grand Hotel</h1>
+                <p class="text-xs text-slate-500">Capi Servizio &amp; Direzione Hub</p>
+              </div>
+            </div>
+
+            <form onsubmit="actions.submitInitialLogin(event)" class="space-y-4">
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Nome Utente</label>
+                <input
+                  id="login-username-input"
+                  type="text"
+                  autocomplete="username"
+                  value="${escapeHTML(state.loginUsernameDraft)}"
+                  oninput="actions.setLoginUsernameDraft(this.value)"
+                  placeholder="Inserisci utente (es. direttore)..."
+                  autofocus
+                  class="w-full rounded-xl border ${state.loginError ? "border-rose-400 bg-rose-50/30" : "border-slate-300"} px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Password</label>
+                <input
+                  id="login-password-input"
+                  type="password"
+                  autocomplete="current-password"
+                  value="${escapeHTML(state.loginPasswordDraft)}"
+                  oninput="actions.setLoginPasswordDraft(this.value)"
+                  placeholder="Password (se impostata)..."
+                  class="w-full rounded-xl border ${state.loginError ? "border-rose-400 bg-rose-50/30" : "border-slate-300"} px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              ${
+                state.loginError
+                  ? `<div class="rounded-xl bg-rose-50 border border-rose-200 px-3.5 py-2.5 text-xs font-semibold text-rose-700">${escapeHTML(state.loginError)}</div>`
+                  : ""
+              }
+
+              <button type="submit" class="press-btn w-full rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-sm py-3 shadow-sm">
+                Accedi al Portale
+              </button>
+            </form>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderHeader() {
+      const role = getCurrentRoleObj();
+      const syncStatus = window.__cloudSync && typeof window.__cloudSync.getStatus === "function"
+        ? window.__cloudSync.getStatus()
+        : { ready: false, label: "Solo Locale (No Cloud)" };
+
+      const scopeBadge = isDirectorOrVice()
+        ? `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-950 border border-amber-300">Visione Globale • Tutti i Reparti</span>`
+        : `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-sky-100 text-sky-900 border border-sky-300">Reparto: ${escapeHTML(getDepartmentObj(role.deptId).name)}</span>`;
+
+      return `
+        <header class="bg-white/95 backdrop-blur-md border-b border-slate-200/80 sticky top-0 z-30 shadow-xs">
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex items-center gap-3 cursor-pointer" onclick="actions.goHome()">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 text-white flex items-center justify-center font-extrabold text-base shadow-sm">
+                  GH
+                </div>
+                <div>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <h1 class="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900">Grand Hotel</h1>
+                    <span class="text-xs font-semibold uppercase tracking-wider text-amber-800 bg-amber-100/80 px-2 py-0.5 rounded-md border border-amber-200">Capi Servizio Hub</span>
+                  </div>
+                  <p class="text-xs text-slate-500 hidden sm:block">Coordinamento operativo • Presenze, Movimento Pasti, Note &amp; Segnalazioni</p>
+                </div>
+              </div>
+              <div class="lg:hidden">${scopeBadge}</div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2.5">
+              <div class="hidden lg:block">${scopeBadge}</div>
+
+              <div class="flex items-center gap-1.5 bg-slate-100/90 border border-slate-200 rounded-xl px-2.5 py-1.5">
+                <label for="role-select" class="text-xs font-semibold text-slate-500">Ruolo:</label>
+                <select id="role-select" onchange="actions.requestRoleChange(this.value)" class="bg-transparent text-xs sm:text-sm font-bold text-slate-900 focus:outline-none cursor-pointer">
+                  ${ROLES.map((r) => {
+                    const hasLock = Boolean(getSectorPassword(getRoleSectorKey(r.id)));
+                    return `<option value="${r.id}" ${r.id === state.activeRole ? "selected" : ""}>${escapeHTML(r.label)}${hasLock ? " 🔒" : ""}</option>`;
+                  }).join("")}
+                </select>
+              </div>
+
+              <div class="flex items-center gap-1.5 bg-slate-100/90 border border-slate-200 rounded-xl px-2.5 py-1.5">
+                <label for="global-date" class="text-xs font-semibold text-slate-500">Data:</label>
+                <input id="global-date" type="date" value="${escapeHTML(state.selectedDate)}" onchange="actions.setDate(this.value)" class="bg-transparent text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none cursor-pointer" />
+              </div>
+
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+                syncStatus.ready
+                  ? "bg-emerald-100 text-emerald-900 border-emerald-300"
+                  : "bg-amber-100 text-amber-950 border-amber-300"
+              }">
+                <span class="w-2 h-2 rounded-full ${syncStatus.ready ? "bg-emerald-600" : "bg-amber-600"}"></span>
+                <span>${escapeHTML(syncStatus.label)}</span>
+              </span>
+
+              <button onclick="actions.manualSyncNow()" title="Aggiorna dati" class="press-btn inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-950 text-xs font-bold">
+                <span>↻ Sincronizza</span>
+              </button>
+
+              <button onclick="actions.logout()" title="Esci dal profilo" class="press-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-rose-50 hover:border-rose-300 hover:text-rose-700 text-xs font-semibold text-slate-700">
+                <span>Esci</span>
+              </button>
+            </div>
+          </div>
+        </header>
+      `;
+    }
+
+    function renderKPISummary() {
+      const kpi = computeDailyKPIs();
+      return `
+        <section class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+          <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-4 shadow-xs">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Presenti Oggi</p>
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+            </div>
+            <p class="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">
+              ${kpi.presentCount}<span class="text-base font-medium text-slate-400">/${kpi.totalStaff}</span>
+            </p>
+            <p class="mt-1 text-xs text-slate-500">Aggiornato dal foglio presenze</p>
+          </div>
+
+          <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-4 shadow-xs">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Totale Pasti</p>
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+            </div>
+            <p class="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">${kpi.totalMeals}</p>
+            <p class="mt-1 text-xs text-slate-500">Colazioni, pranzi e cene</p>
+          </div>
+
+          <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-4 shadow-xs">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Packet Lunch</p>
+              <span class="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
+            </div>
+            <p class="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">${kpi.packetCount}</p>
+            <p class="mt-1 text-xs text-slate-500">Cestini prenotati oggi</p>
+          </div>
+
+          <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-4 shadow-xs">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Manutenzioni Aperte</p>
+              <span class="w-2.5 h-2.5 rounded-full ${kpi.openMaintenance > 0 ? "bg-rose-500" : "bg-emerald-500"}"></span>
+            </div>
+            <p class="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">${kpi.openMaintenance}</p>
+            <p class="mt-1 text-xs text-slate-500">Interventi tecnici attivi</p>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderHomeMenu() {
+      const kpi = computeDailyKPIs();
+      const visibleNotesCount = getVisibleNotes().length;
+      const roomChangesCount = state.roomChangeNotices.filter((r) => r.date === state.selectedDate).length;
+      const intolerancesCount = state.intoleranceNotices.filter((i) => i.date === state.selectedDate).length;
+
+      const cards = [
+        {
+          id: "presenze",
+          title: "Presenze & Turni",
+          subtitle: "Foglio mensile P / R / F / M / PE con codici rapidi e conteggi",
+          badge: `${kpi.presentCount}/${kpi.totalStaff} presenti`,
+          accent: "from-emerald-500 to-teal-700",
+          badgeStyle: "bg-emerald-100 text-emerald-900 border-emerald-200",
+          icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`
+        },
+        {
+          id: "pasti",
+          title: "Movimento Pasti & Intolleranze",
+          subtitle: "Coperti giornalieri, packet lunch e avvisi intolleranze alimentari",
+          badge: `${kpi.totalMeals} pasti • ${intolerancesCount} intoll.`,
+          accent: "from-amber-500 to-orange-600",
+          badgeStyle: "bg-amber-100 text-amber-950 border-amber-200",
+          icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z"/></svg>`
+        },
+        {
+          id: "note",
+          title: "Note di Servizio & Cambi Camera",
+          subtitle: "Comunicazioni operative tra reparti e avvisi rapidi cambio camera",
+          badge: `${visibleNotesCount} note • ${roomChangesCount} cambi cam.`,
+          accent: "from-sky-500 to-blue-700",
+          badgeStyle: "bg-sky-100 text-sky-900 border-sky-200",
+          icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h10M7 12h6m-6 4h8M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>`
+        },
+        {
+          id: "manutenzione",
+          title: "Manutenzione & Segnalazioni",
+          subtitle: "Interventi tecnici per camera/area e segnalazioni ospiti",
+          badge: `${kpi.openMaintenance} manutenzioni aperte`,
+          accent: "from-violet-600 to-indigo-700",
+          badgeStyle: "bg-violet-100 text-violet-900 border-violet-200",
+          icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>`
+        }
+      ];
+
+      if (isDirectorOrVice()) {
+        cards.push({
+          id: "personale_direzione",
+          title: "Inserimento & Eliminazione Personale",
+          subtitle: "Aggiungi nuovi collaboratori ai reparti o rimuovi personale dall'organico",
+          badge: `${state.staff.length} collaboratori in organico`,
+          accent: "from-emerald-600 to-teal-800",
+          badgeStyle: "bg-emerald-100 text-emerald-950 border-emerald-300",
+          icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>`
+        });
+        cards.push({
+          id: "archivio",
+          title: "Archivio Direzione",
+          subtitle: "Cartelle suddivise per Ordini, Cambi Camera, Pasti, Manutenzione e Lamentele Clienti",
+          badge: `${(state.archiveEntries || []).length} voci archiviate`,
+          accent: "from-amber-600 to-yellow-700",
+          badgeStyle: "bg-amber-100 text-amber-950 border-amber-300",
+          icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>`
+        });
+        cards.push({
+          id: "sicurezza",
+          title: "Credenziali & Sicurezza Settori",
+          subtitle: "Imposta o modifica nome utente e password di accesso per ciascun reparto",
+          badge: "Accesso Direzione",
+          accent: "from-slate-700 to-slate-900",
+          badgeStyle: "bg-slate-200 text-slate-900 border-slate-300",
+          icon: `<svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>`
+        });
+      }
+
+      return `
+        <div>
+          ${renderKPISummary()}
+
+          <div class="mb-4 flex items-center justify-between">
+            <div>
+              <h2 class="text-lg sm:text-xl font-extrabold text-slate-900">Sezioni Operative</h2>
+              <p class="text-xs sm:text-sm text-slate-500">Seleziona un'area per aprire la relativa schermata di lavoro</p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
+            ${cards
+              .map(
+                (card) => `
+                  <button
+                    onclick="actions.openSection('${card.id}')"
+                    class="press-btn group text-left bg-white/95 hover:bg-white border border-slate-200/90 hover:border-amber-300 rounded-3xl p-6 shadow-xs hover:shadow-md flex flex-col justify-between gap-5 transition-all"
+                  >
+                    <div class="flex items-start justify-between gap-4">
+                      <div class="w-14 h-14 rounded-2xl bg-gradient-to-br ${card.accent} text-white flex items-center justify-center shadow-sm shrink-0 group-hover:scale-105 transition-transform">
+                        ${card.icon}
+                      </div>
+                      <span class="text-xs font-bold px-3 py-1 rounded-full border ${card.badgeStyle}">
+                        ${escapeHTML(card.badge)}
+                      </span>
+                    </div>
+
+                    <div>
+                      <div class="flex items-center justify-between gap-2">
+                        <h3 class="text-lg sm:text-xl font-extrabold text-slate-900 group-hover:text-amber-800 transition-colors">
+                          ${escapeHTML(card.title)}
+                        </h3>
+                        <span class="text-slate-400 group-hover:text-amber-700 group-hover:translate-x-1 transition-all font-bold text-lg">→</span>
+                      </div>
+                      <p class="text-xs sm:text-sm text-slate-500 mt-1.5 leading-relaxed">
+                        ${escapeHTML(card.subtitle)}
+                      </p>
+                    </div>
+                  </button>
+                `
+              )
+              .join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderSectionTopBar(title, subtitle) {
+      return `
+        <div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white/95 border border-slate-200/90 rounded-2xl px-5 py-4 shadow-xs">
+          <div class="flex items-center gap-3">
+            <button onclick="actions.goHome()" class="press-btn inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold shadow-xs shrink-0">
+              <span>← Home</span>
+            </button>
+            <div>
+              <h2 class="text-base sm:text-lg font-extrabold text-slate-900">${escapeHTML(title)}</h2>
+              <p class="text-xs text-slate-500">${escapeHTML(subtitle)}</p>
+            </div>
+          </div>
+          <span class="text-xs font-semibold text-slate-500">Data attiva: <strong class="text-slate-800">${escapeHTML(state.selectedDate)}</strong></span>
+        </div>
+      `;
+    }
+
+    function renderAttendanceSection() {
+      const ym = state.selectedMonth;
+      const daysCount = getDaysInMonth(ym);
+      const visibleStaff = getVisibleStaff();
+      const dayHeaders = Array.from({ length: daysCount }, (_, i) => i + 1);
+
+      return `
+        <div>
+          ${renderSectionTopBar(
+            "Presenze & Turni Mensili",
+            "Clicca su un codice nella legenda per selezionarlo e clicca sulle celle del calendario per aggiornare."
+          )}
+
+          <div class="bg-white/95 border border-slate-200/90 rounded-2xl shadow-xs overflow-hidden">
+            <div class="p-5 sm:p-6 border-b border-slate-200/80 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              <div>
+                <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Griglia Presenze Reparti</h3>
+                <p class="text-xs sm:text-sm text-slate-500 mt-0.5">Clicca sull'intestazione di un giorno per applicare il codice attivo all'intera colonna.</p>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-2.5">
+                <div class="flex items-center gap-2 bg-slate-100 border border-slate-200 rounded-xl px-3 py-1.5">
+                  <label for="month-picker" class="text-xs font-semibold text-slate-600">Mese:</label>
+                  <input id="month-picker" type="month" value="${escapeHTML(ym)}" onchange="actions.setMonth(this.value)" class="bg-transparent text-xs sm:text-sm font-bold text-slate-900 focus:outline-none cursor-pointer" />
+                </div>
+
+                <button onclick="actions.toggleEditAttendance()" class="press-btn inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border ${state.editAttendanceMode ? "bg-amber-600 text-white border-amber-700 shadow-xs" : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"}">
+                  <span>${state.editAttendanceMode ? "Modifica attiva" : "Sola lettura"}</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="px-5 sm:px-6 py-3 bg-slate-50 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-3">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs font-semibold text-slate-600 mr-1">Legenda (clicca per selezionare):</span>
+                ${ATTENDANCE_CODES.map((item) => {
+                  const isSelected = state.editAttendanceMode && state.selectedBrushCode === item.code;
+                  const displayLabel = item.code === "." ? "Svuota" : `${item.code} = ${item.label}`;
+                  return `
+                    <button
+                      type="button"
+                      onclick="actions.setBrushCode('${item.code}')"
+                      title="Seleziona ${escapeHTML(item.label)}"
+                      class="press-btn inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-semibold cursor-pointer ${item.cellClass} ${isSelected ? "ring-2 ring-slate-900 ring-offset-1 scale-105 shadow-xs" : "opacity-90 hover:opacity-100"}"
+                    >
+                      <span>${escapeHTML(displayLabel)}</span>
+                    </button>
+                  `;
+                }).join("")}
+              </div>
+              <span class="text-xs text-slate-500">Clicca su un giorno in alto per riempire tutta la colonna</span>
+            </div>
+
+            <div class="overflow-x-auto attendance-scroll">
+              <table class="w-full border-collapse text-left">
+                <thead>
+                  <tr class="bg-slate-100/90 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase">
+                    <th class="sticky left-0 z-20 bg-slate-100 px-4 py-3 min-w-[205px] border-r border-slate-200">Collaboratore</th>
+                    ${dayHeaders
+                      .map(
+                        (d) => `
+                          <th onclick="actions.fillColumnForDay(${d})" title="Riempi giorno ${d}" class="px-1 py-2.5 text-center min-w-[34px] cursor-pointer hover:bg-amber-100/70 hover:text-amber-900 transition-colors select-none">
+                            ${d}
+                          </th>
+                        `
+                      )
+                      .join("")}
+                    <th class="px-2.5 py-3 text-center bg-emerald-50 text-emerald-900 border-l border-slate-200 min-w-[42px]">P</th>
+                    <th class="px-2.5 py-3 text-center bg-sky-50 text-sky-900 min-w-[42px]">R</th>
+                    <th class="px-2.5 py-3 text-center bg-amber-50 text-amber-950 min-w-[42px]">F</th>
+                    <th class="px-2.5 py-3 text-center bg-rose-50 text-rose-900 min-w-[42px]">M</th>
+                    <th class="px-2.5 py-3 text-center bg-violet-50 text-violet-900 min-w-[42px]">PE</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200/80 text-xs">
+                  ${
+                    visibleStaff.length === 0
+                      ? `<tr><td colspan="${daysCount + 6}" class="px-6 py-8 text-center text-slate-500">Nessun collaboratore presente per il reparto selezionato.</td></tr>`
+                      : visibleStaff
+                          .map((member) => {
+                            const dept = getDepartmentObj(member.deptId);
+                            const counts = { P: 0, R: 0, F: 0, M: 0, PE: 0 };
+                            const cellsHtml = dayHeaders
+                              .map((d) => {
+                                const code = state.monthlyAttendance[`${ym}__${member.id}__${d}`] || ".";
+                                if (counts[code] !== undefined) counts[code]++;
+                                const meta = getAttendanceMeta(code);
+                                return `
+                                  <td class="p-0.5 text-center">
+                                    <button
+                                      type="button"
+                                      onclick="actions.applyAttendanceCell('${member.id}', ${d})"
+                                      class="w-7 h-7 rounded-md border text-[11px] font-bold transition-transform ${meta.cellClass} ${state.editAttendanceMode ? "hover:scale-110 cursor-pointer" : "cursor-default"}"
+                                      title="${escapeHTML(member.name)} — Giorno ${d}: ${escapeHTML(meta.label)}"
+                                    >
+                                      ${escapeHTML(code)}
+                                    </button>
+                                  </td>
+                                `;
+                              })
+                              .join("");
+
+                            return `
+                              <tr class="hover:bg-slate-50/90 transition-colors">
+                                <td class="sticky left-0 z-10 bg-white px-4 py-2.5 border-r border-slate-200">
+                                  <div class="flex items-center justify-between gap-2">
+                                    <div>
+                                      <div class="font-bold text-slate-900 text-xs sm:text-sm">${escapeHTML(member.name)}</div>
+                                      <div class="flex items-center gap-1.5 mt-0.5">
+                                        <span class="text-[10px] font-semibold px-2 py-0.2 rounded-full border ${dept.badgeClass}">${escapeHTML(dept.name)}</span>
+                                        <span class="text-[11px] text-slate-500">${escapeHTML(member.role)}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+                                ${cellsHtml}
+                                <td class="px-2 py-2 text-center font-extrabold text-emerald-800 bg-emerald-50/60 border-l border-slate-200 tabular-nums">${counts.P}</td>
+                                <td class="px-2 py-2 text-center font-bold text-sky-800 bg-sky-50/60 tabular-nums">${counts.R}</td>
+                                <td class="px-2 py-2 text-center font-bold text-amber-900 bg-amber-50/60 tabular-nums">${counts.F}</td>
+                                <td class="px-2 py-2 text-center font-bold text-rose-800 bg-rose-50/60 tabular-nums">${counts.M}</td>
+                                <td class="px-2 py-2 text-center font-bold text-violet-800 bg-violet-50/60 tabular-nums">${counts.PE}</td>
+                              </tr>
+                            `;
+                          })
+                          .join("")
+                  }
+                </tbody>
+              </table>
+            </div>
+
+            ${
+              isDirectorOrVice()
+                ? `
+                  <div class="px-5 py-3.5 bg-emerald-50/70 border-t border-emerald-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <span class="text-xs font-medium text-emerald-950">Vuoi aggiungere o eliminare un collaboratore dall'organico?</span>
+                    <button type="button" onclick="actions.openSection('personale_direzione')" class="press-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold self-start sm:self-auto">
+                      <span>Vai a Gestione Personale →</span>
+                    </button>
+                  </div>
+                `
+                : ""
+            }
+          </div>
+        </div>
+      `;
+    }
+
+    function renderStaffManagementSection() {
+      if (!isDirectorOrVice()) {
+        return `
+          <div>
+            ${renderSectionTopBar("Accesso Riservato", "Sezione disponibile esclusivamente per Direttore e Vice Direttore")}
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 text-sm text-slate-600">
+              Non hai i permessi per gestire l'organico del personale.
+            </div>
+          </div>
+        `;
+      }
+
+      return `
+        <div>
+          ${renderSectionTopBar(
+            "Inserimento & Eliminazione Personale",
+            "Gestisci l'organico di tutti i reparti dell'hotel (riservato a Direttore e Vice Direttore)."
+          )}
+
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div class="lg:col-span-5">
+              <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs">
+                <div class="flex items-center gap-2.5 mb-4">
+                  <div class="w-9 h-9 rounded-xl bg-emerald-100 border border-emerald-300 text-emerald-900 flex items-center justify-center font-bold">+</div>
+                  <div>
+                    <h3 class="text-base font-extrabold text-slate-900">Inserisci Nuovo Personale</h3>
+                    <p class="text-xs text-slate-500">Il collaboratore comparirà subito nel foglio presenze del reparto</p>
+                  </div>
+                </div>
+
+                <form onsubmit="actions.addStaffMember(event)" class="space-y-3.5">
+                  <div>
+                    <label class="block text-xs font-bold text-slate-700 mb-1">Nome e Cognome</label>
+                    <input name="staffName" type="text" required placeholder="Es. Luca Bianchi" class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-bold text-slate-700 mb-1">Qualifica / Mansione</label>
+                    <input name="staffRole" type="text" required placeholder="Es. Chef de Rang, Cameriere, Portiere..." class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-bold text-slate-700 mb-1">Reparto / Settore</label>
+                    <select name="staffDept" class="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                      ${DEPARTMENTS.map((d) => `<option value="${d.id}">${escapeHTML(d.name)}</option>`).join("")}
+                    </select>
+                  </div>
+
+                  <button type="submit" class="press-btn w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold py-2.5 shadow-xs">
+                    + Aggiungi all'Organico
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            <div class="lg:col-span-7">
+              <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs">
+                <div class="flex items-center justify-between gap-2 mb-4">
+                  <div>
+                    <h3 class="text-base font-extrabold text-slate-900">Personale Attualmente in Organico</h3>
+                    <p class="text-xs text-slate-500">Suddiviso per reparto • Clicca su Elimina per rimuovere una persona</p>
+                  </div>
+                  <span class="text-xs font-bold px-3 py-1 rounded-full bg-slate-100 text-slate-800 border border-slate-200">
+                    Totale: ${state.staff.length}
+                  </span>
+                </div>
+
+                <div class="space-y-4 max-h-[540px] overflow-y-auto pr-1">
+                  ${DEPARTMENTS.map((dept) => {
+                    const deptStaff = state.staff.filter((s) => s.deptId === dept.id);
+                    return `
+                      <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                        <div class="flex items-center justify-between gap-2 mb-2.5">
+                          <span class="text-xs font-bold px-2.5 py-0.5 rounded-full border ${dept.badgeClass}">${escapeHTML(dept.name)}</span>
+                          <span class="text-[11px] font-semibold text-slate-500">${deptStaff.length} ${deptStaff.length === 1 ? "persona" : "persone"}</span>
+                        </div>
+
+                        ${
+                          deptStaff.length === 0
+                            ? `<p class="text-xs text-slate-400 italic">Nessun collaboratore in questo reparto.</p>`
+                            : `<div class="space-y-2">
+                                ${deptStaff
+                                  .map(
+                                    (member) => `
+                                      <div class="flex items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl px-3 py-2">
+                                        <div>
+                                          <p class="text-sm font-bold text-slate-900">${escapeHTML(member.name)}</p>
+                                          <p class="text-xs text-slate-500">${escapeHTML(member.role)}</p>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onclick="actions.removeStaffMember('${member.id}')"
+                                          class="press-btn px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 hover:border-rose-600 text-xs font-bold transition-colors"
+                                        >
+                                          Elimina
+                                        </button>
+                                      </div>
+                                    `
+                                  )
+                                  .join("")}
+                              </div>`
+                        }
+                      </div>
+                    `;
+                  }).join("")}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderMealMovementsSection() {
+      const mealRec = getMealRecordForSelectedDate();
+      const totalMeals = Number(mealRec.breakfast || 0) + Number(mealRec.lunch || 0) + Number(mealRec.dinner || 0);
+      const dayIntolerances = state.intoleranceNotices.filter((i) => i.date === state.selectedDate);
+
+      return `
+        <div>
+          ${renderSectionTopBar(
+            "Movimento Pasti & Intolleranze",
+            "Conteggio coperti giornalieri, packet lunch e segnalazioni intolleranze alimentari."
+          )}
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col justify-between gap-5">
+              <div>
+                <div class="flex items-center justify-between gap-2 mb-4">
+                  <div>
+                    <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Coperti Giornalieri</h3>
+                    <p class="text-xs text-slate-500">Data selezionata: <strong class="text-slate-700">${escapeHTML(state.selectedDate)}</strong></p>
+                  </div>
+                  <span class="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-950 border border-amber-300">Totale: ${totalMeals}</span>
+                </div>
+
+                <div class="grid grid-cols-3 gap-3 mb-5">
+                  <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Colazioni</label>
+                    <input type="number" min="0" value="${Number(mealRec.breakfast || 0)}" onchange="actions.updateMealCount('breakfast', this.value)" class="w-full text-xl font-extrabold text-slate-900 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  </div>
+                  <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Pranzi</label>
+                    <input type="number" min="0" value="${Number(mealRec.lunch || 0)}" onchange="actions.updateMealCount('lunch', this.value)" class="w-full text-xl font-extrabold text-slate-900 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  </div>
+                  <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Cene</label>
+                    <input type="number" min="0" value="${Number(mealRec.dinner || 0)}" onchange="actions.updateMealCount('dinner', this.value)" class="w-full text-xl font-extrabold text-slate-900 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  </div>
+                </div>
+
+                <div class="border-t border-slate-200 pt-4">
+                  <h4 class="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2.5">Packet Lunch Prenotati (${mealRec.packetLunch.length})</h4>
+                  <form onsubmit="actions.addPacketLunch(event)" class="grid grid-cols-1 sm:grid-cols-12 gap-2 mb-3">
+                    <input name="plRoom" type="text" placeholder="Camera (es. 208)" class="sm:col-span-4 rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                    <select name="plDiet" class="sm:col-span-4 rounded-xl border border-slate-300 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500">
+                      <option value="Normale">Normale</option>
+                      <option value="Senza Glutine">Senza Glutine</option>
+                      <option value="Senza Lattosio">Senza Lattosio</option>
+                      <option value="Vegetariano">Vegetariano</option>
+                      <option value="Vegano">Vegano</option>
+                    </select>
+                    <input name="plCount" type="number" min="1" value="1" class="sm:col-span-2 rounded-xl border border-slate-300 px-2.5 py-2 text-xs font-bold text-center focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                    <button type="submit" class="press-btn sm:col-span-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold py-2 px-3">
+                      + Add
+                    </button>
+                  </form>
+
+                  <div class="space-y-1.5 max-h-40 overflow-y-auto">
+                    ${
+                      mealRec.packetLunch.length === 0
+                        ? `<p class="text-xs text-slate-400 italic py-1">Nessun packet lunch registrato per questa data.</p>`
+                        : mealRec.packetLunch
+                            .map(
+                              (pl) => `
+                                <div class="flex items-center justify-between bg-slate-50 border border-slate-200/90 rounded-xl px-3 py-2 text-xs">
+                                  <div class="flex items-center gap-2">
+                                    <span class="font-bold text-slate-900">Cam. ${escapeHTML(pl.room)}</span>
+                                    <span class="px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-700 font-medium">${escapeHTML(pl.diet)}</span>
+                                  </div>
+                                  <div class="flex items-center gap-2.5">
+                                    <span class="font-extrabold text-amber-900">${Number(pl.count)}x</span>
+                                    <button type="button" onclick="actions.removePacketLunch('${pl.id}')" class="text-slate-400 hover:text-rose-600 font-bold" title="Rimuovi">×</button>
+                                  </div>
+                                </div>
+                              `
+                            )
+                            .join("")
+                    }
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col gap-4">
+              <div class="flex items-center justify-between gap-2">
+                <div>
+                  <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Intolleranze &amp; Allergie Alimentari</h3>
+                  <p class="text-xs text-slate-500">Avvisi rapidi condivisi tra Ricevimento, Cucina e Sala</p>
+                </div>
+                <span class="px-3 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-900 border border-rose-200">
+                  ${dayIntolerances.length} segnalazioni
+                </span>
+              </div>
+
+              <form onsubmit="actions.addIntoleranceNotice(event)" class="bg-amber-50/70 border border-amber-200/90 rounded-xl p-3.5 space-y-2.5">
+                <div class="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                  <input name="intRoom" type="text" placeholder="Camera (es. 204)" class="sm:col-span-4 rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  <input name="intDetail" type="text" placeholder="Dettaglio (es. Celiachia, allergia frutta a guscio...)" class="sm:col-span-8 rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                </div>
+                <div class="flex justify-end">
+                  <button type="submit" class="press-btn rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold px-4 py-2 shadow-xs">
+                    + Registra Intolleranza
+                  </button>
+                </div>
+              </form>
+
+              <div class="space-y-2.5 max-h-[340px] overflow-y-auto pr-1">
+                ${
+                  dayIntolerances.length === 0
+                    ? `<div class="rounded-xl border border-dashed border-slate-300 p-6 text-center text-xs text-slate-500">Nessuna intolleranza registrata per questa data.</div>`
+                    : dayIntolerances
+                        .map(
+                          (item) => {
+                            const archived = isEntryArchived(`intolerance:${item.id}`);
+                            return `
+                              <div class="rounded-xl border border-amber-200 bg-amber-50/40 p-3.5 flex items-start justify-between gap-3">
+                                <div>
+                                  <div class="flex items-center gap-2 mb-1 flex-wrap">
+                                    <span class="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-amber-200/80 text-amber-950">Cam. ${escapeHTML(item.room)}</span>
+                                    <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-white border border-amber-200 text-slate-700">${escapeHTML(formatPublishedBadge(item.date, item.time))}</span>
+                                    <span class="text-[11px] text-slate-500">da ${escapeHTML(item.authorRole)}</span>
+                                  </div>
+                                  <p class="text-sm font-medium text-slate-900">${escapeHTML(item.detail)}</p>
+                                </div>
+                                <div class="flex items-center gap-2 shrink-0">
+                                  ${
+                                    isDirectorOrVice()
+                                      ? archived
+                                        ? `<span class="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300">✓ Archiviato</span>`
+                                        : `<button type="button" onclick="actions.quickArchiveFromItem('intolerance', '${item.id}')" class="press-btn text-[11px] font-bold px-2.5 py-1 rounded-lg bg-amber-100 text-amber-950 border border-amber-300 hover:bg-amber-200">Archivia</button>`
+                                      : ""
+                                  }
+                                  <button type="button" onclick="actions.deleteIntoleranceNotice('${item.id}')" class="text-xs text-slate-400 hover:text-rose-600 font-semibold">Elimina</button>
+                                </div>
+                              </div>
+                            `;
+                          }
+                        )
+                        .join("")
+                }
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderServiceNotesSection() {
+      const visibleNotes = getVisibleNotes();
+      const role = getCurrentRoleObj();
+      const dayRoomChanges = state.roomChangeNotices.filter((r) => r.date === state.selectedDate);
+
+      return `
+        <div>
+          ${renderSectionTopBar(
+            "Note di Servizio & Cambi Camera",
+            "Bacheca comunicazioni tra reparti e registro cambi camera in tempo reale."
+          )}
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col gap-4">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Note di Servizio</h3>
+                  <p class="text-xs text-slate-500">Comunicazioni operative tra Direzione e Capi Servizio</p>
+                </div>
+                <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">${visibleNotes.length} note</span>
+              </div>
+
+              <form onsubmit="actions.addServiceNote(event)" class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-3">
+                ${
+                  isDirectorOrVice()
+                    ? `
+                      <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                          <span class="text-xs font-bold text-slate-700">Reparti destinatari:</span>
+                          <label class="inline-flex items-center gap-1.5 text-xs font-bold text-amber-900 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              ${state.noteSelectAllDepts ? "checked" : ""}
+                              onchange="actions.toggleNoteAllDepts(this.checked)"
+                              class="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+                            />
+                            <span>Tutti i reparti</span>
+                          </label>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5">
+                          ${DEPARTMENTS.map((d) => {
+                            const isChecked = state.noteSelectAllDepts || (state.noteSelectedDeptIds || []).includes(d.id);
+                            return `
+                              <button
+                                type="button"
+                                onclick="actions.toggleNoteDeptSelection('${d.id}')"
+                                class="press-btn inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-semibold ${
+                                  isChecked
+                                    ? `${d.badgeClass} ring-1 ring-slate-400`
+                                    : "bg-white text-slate-500 border-slate-200 hover:bg-slate-100"
+                                }"
+                              >
+                                <span>${isChecked ? "✓" : "+"}</span>
+                                <span>${escapeHTML(d.name)}</span>
+                              </button>
+                            `;
+                          }).join("")}
+                        </div>
+                      </div>
+                    `
+                    : `<div class="text-xs font-semibold text-slate-600">Reparto: <strong class="text-slate-900">${escapeHTML(getDepartmentObj(role.deptId).name)}</strong></div>`
+                }
+
+                <div class="flex flex-col sm:flex-row gap-2">
+                  <input name="noteText" type="text" placeholder="Scrivi una nota operativa per il turno..." class="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  <button type="submit" class="press-btn rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold px-4 py-2 shrink-0">
+                    Pubblica nota
+                  </button>
+                </div>
+              </form>
+
+              <div class="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
+                ${
+                  visibleNotes.length === 0
+                    ? `<div class="rounded-xl border border-dashed border-slate-300 p-6 text-center text-xs text-slate-500">Nessuna nota di servizio per questa data.</div>`
+                    : visibleNotes
+                        .map((note) => {
+                          const archived = isEntryArchived(`note:${note.id}`);
+                          return `
+                            <div class="rounded-xl border border-slate-200/90 bg-white p-3.5 shadow-2xs flex items-start justify-between gap-3">
+                              <div class="space-y-1.5">
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                  ${formatNoteRecipientsBadge(note)}
+                                  <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700">${escapeHTML(formatPublishedBadge(note.date, note.time))}</span>
+                                  <span class="text-[11px] text-slate-500">da <strong>${escapeHTML(note.authorRole)}</strong></span>
+                                </div>
+                                <p class="text-sm text-slate-800 leading-relaxed">${escapeHTML(note.text)}</p>
+                              </div>
+                              <div class="flex items-center gap-2 shrink-0">
+                                ${
+                                  isDirectorOrVice()
+                                    ? archived
+                                      ? `<span class="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300">✓ Archiviato</span>`
+                                      : `<button type="button" onclick="actions.quickArchiveFromItem('note', '${note.id}')" class="press-btn text-[11px] font-bold px-2.5 py-1 rounded-lg bg-amber-100 text-amber-950 border border-amber-300 hover:bg-amber-200">Archivia</button>`
+                                    : ""
+                                }
+                                ${
+                                  isDirectorOrVice() || note.authorRole === role.label
+                                    ? `<button type="button" onclick="actions.deleteServiceNote('${note.id}')" class="text-xs text-slate-400 hover:text-rose-600 font-semibold" title="Elimina nota">Elimina</button>`
+                                    : ""
+                                }
+                              </div>
+                            </div>
+                          `;
+                        })
+                        .join("")
+                }
+              </div>
+            </div>
+
+            <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col gap-4">
+              <div class="flex items-center justify-between gap-2">
+                <div>
+                  <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Cambi Camera</h3>
+                  <p class="text-xs text-slate-500">Avvisi immediati per Ricevimento, Governante, Sala e Manutenzione</p>
+                </div>
+                <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-teal-100 text-teal-900 border border-teal-200">${dayRoomChanges.length} cambi</span>
+              </div>
+
+              <form onsubmit="actions.addRoomChangeNotice(event)" class="bg-teal-50/70 border border-teal-200/90 rounded-xl p-3.5 space-y-2.5">
+                <div class="grid grid-cols-2 gap-2">
+                  <input name="fromRoom" type="text" placeholder="Da Camera (es. 305)" class="rounded-xl border border-teal-300 bg-white px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                  <input name="toRoom" type="text" placeholder="A Camera (es. 412)" class="rounded-xl border border-teal-300 bg-white px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                </div>
+                <div class="flex flex-col sm:flex-row gap-2">
+                  <input name="roomChangeNote" type="text" placeholder="Motivo / note bagagli o preparazione camera..." class="flex-1 rounded-xl border border-teal-300 bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal-500" />
+                  <button type="submit" class="press-btn rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold px-4 py-2 shrink-0">
+                    + Comunica Cambio
+                  </button>
+                </div>
+              </form>
+
+              <div class="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
+                ${
+                  dayRoomChanges.length === 0
+                    ? `<div class="rounded-xl border border-dashed border-slate-300 p-6 text-center text-xs text-slate-500">Nessun cambio camera registrato per questa data.</div>`
+                    : dayRoomChanges
+                        .map(
+                          (rc) => {
+                            const archived = isEntryArchived(`room_change:${rc.id}`);
+                            return `
+                              <div class="rounded-xl border border-teal-200 bg-teal-50/40 p-3.5 flex items-start justify-between gap-3">
+                                <div>
+                                  <div class="flex items-center gap-2 mb-1 flex-wrap">
+                                    <span class="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-teal-200/80 text-teal-950">Cam. ${escapeHTML(rc.fromRoom)} → Cam. ${escapeHTML(rc.toRoom)}</span>
+                                    <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-white border border-teal-200 text-slate-700">${escapeHTML(formatPublishedBadge(rc.date, rc.time))}</span>
+                                    <span class="text-[11px] text-slate-500">da ${escapeHTML(rc.authorRole)}</span>
+                                  </div>
+                                  <p class="text-sm text-slate-800">${escapeHTML(rc.note)}</p>
+                                </div>
+                                <div class="flex items-center gap-2 shrink-0">
+                                  ${
+                                    isDirectorOrVice()
+                                      ? archived
+                                        ? `<span class="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300">✓ Archiviato</span>`
+                                        : `<button type="button" onclick="actions.quickArchiveFromItem('room_change', '${rc.id}')" class="press-btn text-[11px] font-bold px-2.5 py-1 rounded-lg bg-amber-100 text-amber-950 border border-amber-300 hover:bg-amber-200">Archivia</button>`
+                                      : ""
+                                  }
+                                  <button type="button" onclick="actions.deleteRoomChangeNotice('${rc.id}')" class="text-xs text-slate-400 hover:text-rose-600 font-semibold">Elimina</button>
+                                </div>
+                              </div>
+                            `;
+                          }
+                        )
+                        .join("")
+                }
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderMaintenanceAndComplaintsSection() {
+      const readOnlyMaintenance = isMaintenanceRole();
+
+      return `
+        <div>
+          ${renderSectionTopBar(
+            "Manutenzione & Segnalazioni Ospiti",
+            readOnlyMaintenance
+              ? "Vista Manutentore: leggi le richieste aperte e aggiorna lo stato fino alla risoluzione."
+              : "Gestione interventi tecnici e follow-up richieste/reclami ospiti."
+          )}
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col gap-4">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Richieste Manutenzione</h3>
+                  <p class="text-xs text-slate-500">Clicca sul badge di stato per avanzare: Aperta → In corso → Completata</p>
+                </div>
+                <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">${state.maintenanceTickets.length}</span>
+              </div>
+
+              ${
+                readOnlyMaintenance
+                  ? `
+                    <div class="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs font-semibold text-sky-900">
+                      Modalità lettura e risoluzione: puoi leggere gli interventi assegnati e aggiornare lo stato fino a <strong>Completata</strong>.
+                    </div>
+                  `
+                  : `
+                    <form onsubmit="actions.addMaintenanceTicket(event)" class="grid grid-cols-1 sm:grid-cols-12 gap-2 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                      <input name="mntArea" type="text" placeholder="Camera / Area" class="sm:col-span-4 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                      <input name="mntIssue" type="text" placeholder="Descrizione guasto o intervento..." class="sm:col-span-5 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                      <button type="submit" class="press-btn sm:col-span-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-3">
+                        + Segnala
+                      </button>
+                    </form>
+                  `
+              }
+
+              <div class="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                ${state.maintenanceTickets
+                  .map((t) => {
+                    const statusBadge =
+                      t.status === "Completata"
+                        ? "bg-emerald-100 text-emerald-900 border-emerald-300"
+                        : t.status === "In corso"
+                        ? "bg-amber-100 text-amber-950 border-amber-300"
+                        : "bg-rose-100 text-rose-900 border-rose-300";
+                    return `
+                      <div class="rounded-xl border border-slate-200/90 p-3.5 flex items-center justify-between gap-3 bg-white">
+                        <div>
+                          <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-bold text-sm text-slate-900">${escapeHTML(t.roomOrArea)}</span>
+                            <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700">${escapeHTML(formatPublishedBadge(t.date, t.time))}</span>
+                          </div>
+                          <p class="text-xs text-slate-600 mt-1">${escapeHTML(t.issue)}</p>
+                        </div>
+                        <button type="button" onclick="actions.cycleMaintenanceStatus('${t.id}')" class="press-btn shrink-0 px-3 py-1 rounded-full border text-xs font-bold ${statusBadge}" title="Clicca per cambiare stato">
+                          ${escapeHTML(t.status)}
+                        </button>
+                      </div>
+                    `;
+                  })
+                  .join("")}
+              </div>
+            </div>
+
+            <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col gap-4">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Segnalazioni &amp; Reclami Ospiti</h3>
+                  <p class="text-xs text-slate-500">Clicca sullo stato per avanzare: Aperta → In lavorazione → Risolta</p>
+                </div>
+                <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">${state.complaints.length}</span>
+              </div>
+
+              <form onsubmit="actions.addComplaint(event)" class="grid grid-cols-1 sm:grid-cols-12 gap-2 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                <input name="cmpRoom" type="text" placeholder="Cam. / Ospite" class="sm:col-span-4 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                <input name="cmpDetail" type="text" placeholder="Dettaglio segnalazione o richiesta..." class="sm:col-span-5 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                <button type="submit" class="press-btn sm:col-span-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-3">
+                  + Registra
+                </button>
+              </form>
+
+              <div class="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                ${state.complaints
+                  .map((c) => {
+                    const badge =
+                      c.status === "Risolta"
+                        ? "bg-emerald-100 text-emerald-900 border-emerald-300"
+                        : c.status === "In lavorazione"
+                        ? "bg-amber-100 text-amber-950 border-amber-300"
+                        : "bg-rose-100 text-rose-900 border-rose-300";
+                    return `
+                      <div class="rounded-xl border border-slate-200/90 p-3.5 flex items-center justify-between gap-3 bg-white">
+                        <div>
+                          <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-bold text-sm text-slate-900">${escapeHTML(c.roomOrGuest)}</span>
+                            <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700">${escapeHTML(formatPublishedBadge(c.date, c.time))}</span>
+                          </div>
+                          <p class="text-xs text-slate-600 mt-1">${escapeHTML(c.detail)}</p>
+                        </div>
+                        <button type="button" onclick="actions.toggleComplaintStatus('${c.id}')" class="press-btn shrink-0 px-3 py-1 rounded-full border text-xs font-bold ${badge}" title="Clicca per avanzare stato">
+                          ${escapeHTML(c.status)}
+                        </button>
+                      </div>
+                    `;
+                  })
+                  .join("")}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderArchiveSection() {
+      if (!isDirectorOrVice()) {
+        return `
+          <div>
+            ${renderSectionTopBar("Accesso Riservato", "Archivio disponibile esclusivamente per Direttore e Vice Direttore")}
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 text-sm text-slate-600">
+              Non hai i permessi per visualizzare questa sezione.
+            </div>
+          </div>
+        `;
+      }
+
+      const activeCat = state.archiveFilterCategory;
+      const activeCatMeta = activeCat ? ARCHIVE_CATEGORIES.find((c) => c.id === activeCat) : null;
+      const searchQ = (state.archiveSearchQuery || "").trim().toLowerCase();
+      const dateFilter = state.archiveDateFilter || "";
+
+      const countsByCat = {};
+      ARCHIVE_CATEGORIES.forEach((cat) => {
+        countsByCat[cat.id] = 0;
+      });
+      (state.archiveEntries || []).forEach((entry) => {
+        if (countsByCat[entry.category] !== undefined) {
+          countsByCat[entry.category]++;
+        }
+      });
+
+      const filteredFolderEntries = activeCat
+        ? (state.archiveEntries || []).filter((entry) => {
+            if (entry.category !== activeCat) return false;
+            if (dateFilter && entry.date !== dateFilter) return false;
+            if (searchQ) {
+              const hay = `${entry.title} ${entry.detail} ${entry.authorRole} ${entry.date} ${entry.time || ""}`.toLowerCase();
+              if (!hay.includes(searchQ)) return false;
+            }
+            return true;
+          })
+        : [];
+
+      const groupedByDate = {};
+      filteredFolderEntries.forEach((entry) => {
+        const dKey = entry.date || getTodayISO();
+        if (!groupedByDate[dKey]) groupedByDate[dKey] = [];
+        groupedByDate[dKey].push(entry);
+      });
+      const sortedDateKeys = Object.keys(groupedByDate).sort((a, b) => b.localeCompare(a));
+
+      return `
+        <div>
+          ${renderSectionTopBar(
+            "Archivio Direzione",
+            "Clicca su un riquadro per aprire la cartella e clicca di nuovo sullo stesso riquadro per chiuderla."
+          )}
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 mb-6">
+            ${ARCHIVE_CATEGORIES.map((cat) => {
+              const isOpen = activeCat === cat.id;
+              return `
+                <button
+                  type="button"
+                  onclick="actions.toggleArchiveFolderTile('${cat.id}')"
+                  class="press-btn text-left rounded-2xl border p-4 transition-all ${
+                    isOpen
+                      ? "bg-slate-900 text-white border-slate-900 shadow-md ring-2 ring-amber-400"
+                      : "bg-white/95 hover:bg-white text-slate-900 border-slate-200/90 hover:border-amber-300 shadow-xs"
+                  }"
+                >
+                  <div class="flex items-center justify-between gap-2 mb-2.5">
+                    <span class="text-xl">${cat.icon}</span>
+                    <span class="text-xs font-extrabold px-2.5 py-0.5 rounded-full border ${
+                      isOpen ? "bg-amber-400 text-slate-950 border-amber-300" : cat.badgeClass
+                    }">
+                      ${countsByCat[cat.id] || 0} voci
+                    </span>
+                  </div>
+                  <p class="text-sm font-extrabold leading-snug">${escapeHTML(cat.label)}</p>
+                  <p class="text-[11px] mt-1 ${isOpen ? "text-amber-300 font-semibold" : "text-slate-500"}">
+                    ${isOpen ? "Clicca di nuovo per chiudere" : "Clicca per aprire cartella"}
+                  </p>
+                </button>
+              `;
+            }).join("")}
+          </div>
+
+          ${
+            activeCat && activeCatMeta
+              ? `
+                <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs space-y-5">
+                  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 border-b border-slate-200">
+                    <div class="flex items-center gap-2.5">
+                      <span class="text-2xl">${activeCatMeta.icon}</span>
+                      <div>
+                        <h3 class="text-base sm:text-lg font-extrabold text-slate-900">${escapeHTML(activeCatMeta.label)}</h3>
+                        <p class="text-xs text-slate-500">${filteredFolderEntries.length} voci archiviate • divise per data e orario</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onclick="actions.toggleArchiveFolderTile('${activeCat}')"
+                      class="press-btn px-3.5 py-1.5 rounded-xl border border-slate-300 bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-800 self-start sm:self-auto"
+                    >
+                      ✕ Chiudi cartella
+                    </button>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <div class="sm:col-span-6">
+                      <input
+                        type="text"
+                        value="${escapeHTML(state.archiveSearchQuery)}"
+                        oninput="actions.setArchiveSearchQuery(this.value)"
+                        placeholder="Cerca per parola chiave, camera, orario o autore..."
+                        class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                    <div class="sm:col-span-4">
+                      <input
+                        type="date"
+                        value="${escapeHTML(state.archiveDateFilter)}"
+                        onchange="actions.setArchiveDateFilter(this.value)"
+                        class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                    <div class="sm:col-span-2">
+                      <button
+                        type="button"
+                        onclick="actions.resetArchiveFilters()"
+                        class="press-btn w-full h-full rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 py-2 px-3"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+
+                  ${
+                    sortedDateKeys.length === 0
+                      ? `<div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-xs text-slate-500">Nessuna voce trovata in questa cartella con i filtri attuali.</div>`
+                      : `<div class="space-y-5 max-h-[520px] overflow-y-auto pr-1">
+                          ${sortedDateKeys
+                            .map((dateKey) => {
+                              const dayItems = groupedByDate[dateKey];
+                              return `
+                                <div class="space-y-2.5">
+                                  <div class="flex items-center gap-2">
+                                    <span class="text-xs font-extrabold px-3 py-1 rounded-full bg-slate-900 text-white">📅 ${escapeHTML(dateKey)}</span>
+                                    <span class="text-[11px] font-semibold text-slate-500">${dayItems.length} ${dayItems.length === 1 ? "voce" : "voci"}</span>
+                                  </div>
+                                  <div class="space-y-2 pl-1 sm:pl-2 border-l-2 border-amber-300">
+                                    ${dayItems
+                                      .map(
+                                        (entry) => `
+                                          <div class="rounded-xl border border-slate-200/90 bg-white p-3.5 shadow-2xs flex items-start justify-between gap-3">
+                                            <div>
+                                              <div class="flex items-center gap-2 flex-wrap mb-1">
+                                                <span class="text-xs font-extrabold px-2.5 py-0.5 rounded-md bg-amber-100 text-amber-950 border border-amber-300">🕒 ${escapeHTML(entry.time || "--:--")}</span>
+                                                <span class="text-[11px] font-semibold text-slate-500">da <strong>${escapeHTML(entry.authorRole)}</strong></span>
+                                              </div>
+                                              <h4 class="text-sm font-extrabold text-slate-900">${escapeHTML(entry.title)}</h4>
+                                              <p class="text-xs text-slate-700 mt-0.5 leading-relaxed">${escapeHTML(entry.detail)}</p>
+                                            </div>
+                                            <button type="button" onclick="actions.deleteArchiveEntry('${entry.id}')" class="text-xs text-slate-400 hover:text-rose-600 font-semibold shrink-0" title="Elimina dall'archivio">
+                                              Elimina
+                                            </button>
+                                          </div>
+                                        `
+                                      )
+                                      .join("")}
+                                  </div>
+                                </div>
+                              `;
+                            })
+                            .join("")}
+                        </div>`
+                  }
+                </div>
+              `
+              : ""
+          }
+        </div>
+      `;
+    }
+
+    function renderSecuritySection() {
+      if (!isDirectorOrVice()) {
+        return `
+          <div>
+            ${renderSectionTopBar("Accesso Riservato", "Questa sezione è riservata esclusivamente a Direttore e Vice Direttore.")}
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 text-sm text-slate-600">
+              Non hai i permessi per visualizzare o modificare le credenziali dei settori.
+            </div>
+          </div>
+        `;
+      }
+
+      const sectors = [
+        { key: "director", label: "Direttore", badgeClass: "bg-amber-100 text-amber-950 border-amber-300" },
+        { key: "vice_director", label: "Vice Direttore", badgeClass: "bg-amber-100 text-amber-950 border-amber-300" },
+        ...DEPARTMENTS.filter((d) => d.id !== "direzione").map((d) => ({
+          key: d.id,
+          label: `Capo ${d.name}`,
+          badgeClass: d.badgeClass
+        }))
+      ];
+
+      return `
+        <div>
+          ${renderSectionTopBar(
+            "Credenziali & Sicurezza Settori",
+            "Configura nome utente e password di accesso iniziale e cambio profilo per ogni reparto."
+          )}
+
+          <div class="bg-white/95 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs">
+            <div class="mb-5">
+              <h3 class="text-base sm:text-lg font-extrabold text-slate-900">Utenti e Password dei Settori</h3>
+              <p class="text-xs sm:text-sm text-slate-500 mt-0.5">
+                Ogni settore effettua l'accesso iniziale con il proprio <strong>Nome Utente</strong> e la relativa <strong>Password</strong> (se impostata).
+              </p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              ${sectors
+                .map((sec) => {
+                  const savedCred = getSectorCredential(sec.key);
+                  const isProtected = Boolean(savedCred.password);
+                  const draft = state.credentialDraftsByKey[sec.key] || {
+                    username: savedCred.username,
+                    password: savedCred.password
+                  };
+
+                  return `
+                    <div class="rounded-2xl border border-slate-200/90 bg-slate-50/70 p-4 flex flex-col justify-between gap-3">
+                      <div class="flex items-center justify-between gap-2">
+                        <span class="text-xs font-bold px-2.5 py-1 rounded-full border ${sec.badgeClass}">${escapeHTML(sec.label)}</span>
+                        <span class="text-[11px] font-bold px-2.5 py-0.5 rounded-full ${isProtected ? "bg-emerald-100 text-emerald-900 border border-emerald-300" : "bg-slate-200 text-slate-600"}">
+                          ${isProtected ? "🔒 Protetto" : "Senza password"}
+                        </span>
+                      </div>
+
+                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label class="block text-[11px] font-bold text-slate-600 mb-1">Nome Utente</label>
+                          <input
+                            type="text"
+                            value="${escapeHTML(draft.username)}"
+                            oninput="actions.setCredentialDraft('${sec.key}', 'username', this.value)"
+                            placeholder="Utente..."
+                            class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          />
+                        </div>
+                        <div>
+                          <label class="block text-[11px] font-bold text-slate-600 mb-1">Password</label>
+                          <input
+                            type="text"
+                            value="${escapeHTML(draft.password)}"
+                            oninput="actions.setCredentialDraft('${sec.key}', 'password', this.value)"
+                            placeholder="Nessuna password..."
+                            class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div class="flex items-center justify-end gap-2">
+                        ${
+                          isProtected
+                            ? `<button type="button" onclick="actions.clearSectorPassword('${sec.key}')" class="press-btn px-3 py-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold">Rimuovi pwd</button>`
+                            : ""
+                        }
+                        <button type="button" onclick="actions.saveSectorCredential('${sec.key}')" class="press-btn px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold">
+                          Salva credenziali
+                        </button>
+                      </div>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderActiveSection() {
+      switch (state.activeSection) {
+        case "presenze":
+          return renderAttendanceSection();
+        case "pasti":
+          return renderMealMovementsSection();
+        case "note":
+          return renderServiceNotesSection();
+        case "manutenzione":
+          return renderMaintenanceAndComplaintsSection();
+        case "personale_direzione":
+          return renderStaffManagementSection();
+        case "archivio":
+          return renderArchiveSection();
+        case "sicurezza":
+          return renderSecuritySection();
+        default:
+          return renderHomeMenu();
+      }
+    }
+
+    function render() {
+      const app = document.getElementById("app");
+      if (!app) return;
+
+      if (!state.isAuthenticated) {
+        app.innerHTML = renderLoginScreen();
+        return;
+      }
+
+      app.innerHTML = `
+        ${renderHeader()}
+        <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+          ${renderActiveSection()}
+        </main>
+        <footer class="border-t border-slate-200/80 bg-white/80 py-3.5 px-4 text-center text-xs text-slate-500">
+          Grand Hotel — Capi Servizio Hub • Coordinamento reparti &amp; Direzione
+        </footer>
+        ${renderRoleLockModal()}
+      `;
+
+      if (state.pendingRoleId) {
+        const pwdInput = document.getElementById("role-password-input");
+        if (pwdInput) pwdInput.focus();
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      render();
+    });
+  </script>
+</body>
+</html>
