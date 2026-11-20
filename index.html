@@ -230,7 +230,7 @@
       }
     }
 
-    window.__cloudSync = {
+    window.__cloudSync = 
       isActive: () => cloudReady,
       getStatus: () => ({
         ready: cloudReady,
@@ -243,7 +243,7 @@
 
     initCloudSync();
   </script>
-      },
+      
 
       logout() {
         state.isAuthenticated = false;
@@ -847,8 +847,8 @@
         state.archiveSearchQuery = "";
         state.archiveDateFilter = "";
         render();
-      },
-
+      }
+     }
       quickArchiveFromItem(type, itemId) {
         if (!isDirectorOrVice() || isArchivingInProgress) return;
         const sourceRef = `${type}:${itemId}`;
