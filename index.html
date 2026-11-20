@@ -38,6 +38,170 @@
   <!-- Contenitore notifiche toast non bloccanti -->
   <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full px-4 sm:px-0"></div>
 
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    const STORAGE_KEY = "grand_hotel_capi_servizio_hub_v1";
+    const APP_ID = typeof __app_id !== "undefined" && __app_id ? __app_id : "grand_hotel_capi_servizio_hub";
+    const SHARED_DOC_PATH = ["artifacts", APP_ID, "public", "data", "hotel_hub_shared_state"];
+
+    let cloudDb = null;
+    let cloudAuth = null;
+    let cloudUser = null;
+    let cloudReady = false;
+    let isApplyingRemoteSync = false;
+
+    const SHARED_STATE_KEYS = [
+      "sectorCredentials",
+      "staff",
+      "monthlyAttendance",
+      "serviceNotes",
+      "mealMovements",
+      "intoleranceNotices",
+      "roomChangeNotices",
+      "maintenanceTickets",
+      "complaints",
+      "archiveEntries"
+    ];
+
+    function extractSharedPayload(sourceObj) {
+      const payload = {};
+      SHARED_STATE_KEYS.forEach((key) => {
+        if (sourceObj && sourceObj[key] !== undefined) {
+          payload[key] = sourceObj[key];
+        }
+      });
+      return payload;
+    }
+
+    function applySharedPayloadToState(payload) {
+      if (!payload || typeof payload !== "object" || typeof state === "undefined") return;
+      isApplyingRemoteSync = true;
+      try {
+        SHARED_STATE_KEYS.forEach((key) => {
+          if (payload[key] !== undefined) {
+            state[key] = payload[key];
+          }
+        });
+        if (Array.isArray(state.complaints)) {
+          state.complaints = state.complaints.map((c) => {
+            const st = c?.status;
+            if (st === "Gestita") return { ...c, status: "Risolta" };
+            if (st === "Da gestire") return { ...c, status: "Aperta" };
+            return { ...c, status: ["Aperta", "In lavorazione", "Risolta"].includes(st) ? st : "Aperta" };
+          });
+        }
+        try {
+          const {
+            pendingRoleId,
+            passwordDraft,
+            passwordError,
+            loginPasswordDraft,
+            loginError,
+            ...persistable
+          } = state;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
+        } catch (e) {
+          // Ignora errori di scrittura locale
+        }
+      } finally {
+        isApplyingRemoteSync = false;
+      }
+    }
+
+    async function pushSharedStateToCloud() {
+      if (!cloudReady || !cloudDb || !cloudUser || isApplyingRemoteSync || typeof state === "undefined") return;
+      try {
+        const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
+        await setDoc(
+          docRef,
+          {
+            ...extractSharedPayload(state),
+            updatedAt: Date.now(),
+            updatedBy: state.activeRole || "unknown"
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn("Sincronizzazione cloud in scrittura non riuscita:", err);
+      }
+    }
+
+    async function initCloudSync() {
+      try {
+        if (typeof __firebase_config === "undefined" || !__firebase_config) {
+          return;
+        }
+        const firebaseConfig = typeof __firebase_config === "string" ? JSON.parse(__firebase_config) : __firebase_config;
+        if (!firebaseConfig || !firebaseConfig.projectId) {
+          return;
+        }
+
+        const app = initializeApp(firebaseConfig);
+        cloudAuth = getAuth(app);
+        cloudDb = getFirestore(app);
+
+        if (typeof __initial_auth_token !== "undefined" && __initial_auth_token) {
+          await signInWithCustomToken(cloudAuth, __initial_auth_token);
+        } else {
+          await signInAnonymously(cloudAuth);
+        }
+
+        cloudUser = cloudAuth.currentUser;
+        if (!cloudUser) return;
+        cloudReady = true;
+
+        const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          applySharedPayloadToState(snap.data());
+          if (typeof render === "function") render();
+        } else {
+          await pushSharedStateToCloud();
+        }
+
+        onSnapshot(
+          docRef,
+          (snapshot) => {
+            if (!snapshot.exists()) return;
+            applySharedPayloadToState(snapshot.data());
+            if (typeof render === "function") {
+              render();
+            }
+          },
+          (err) => {
+            console.warn("Ascolto sincronizzazione cloud interrotto:", err);
+          }
+        );
+      } catch (err) {
+        console.warn("Sincronizzazione cloud non attiva in questo ambiente:", err);
+      }
+    }
+
+    window.__cloudSync = {
+      isActive: () => cloudReady,
+      push: pushSharedStateToCloud,
+      pullLatest: async () => {
+        if (!cloudReady || !cloudDb || !cloudUser) return false;
+        try {
+          const docRef = doc(cloudDb, ...SHARED_DOC_PATH);
+          const snap = await getDoc(docRef);
+          if (snap.exists()) {
+            applySharedPayloadToState(snap.data());
+            return true;
+          }
+        } catch (err) {
+          console.warn("Lettura cloud non riuscita:", err);
+        }
+        return false;
+      }
+    };
+
+    initCloudSync();
+  </script>
+
   <script>
     const STORAGE_KEY = "grand_hotel_capi_servizio_hub_v1";
 
@@ -401,6 +565,9 @@
           ...persistable
         } = state;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
+        if (window.__cloudSync && typeof window.__cloudSync.push === "function") {
+          window.__cloudSync.push();
+        }
       } catch (err) {
         console.warn("Impossibile salvare lo stato locale:", err);
       }
@@ -636,9 +803,12 @@
         if (state.loginError) state.loginError = "";
       },
 
-      submitInitialLogin(event) {
+      async submitInitialLogin(event) {
         event.preventDefault();
         syncSharedStateFromStorage();
+        if (window.__cloudSync && typeof window.__cloudSync.pullLatest === "function") {
+          await window.__cloudSync.pullLatest();
+        }
         const enteredUser = (state.loginUsernameDraft || "").trim().toLowerCase();
         const enteredPass = (state.loginPasswordDraft || "").trim();
 
@@ -689,12 +859,14 @@
         state.passwordError = "";
         saveState();
         render();
-        showToast("Sessione chiusa. Effettua il login per accedere.");
       },
 
-      requestRoleChange(newRoleId) {
+      async requestRoleChange(newRoleId) {
         if (newRoleId === state.activeRole) return;
         syncSharedStateFromStorage();
+        if (window.__cloudSync && typeof window.__cloudSync.pullLatest === "function") {
+          await window.__cloudSync.pullLatest();
+        }
         const sectorKey = getRoleSectorKey(newRoleId);
         const expectedPass = getSectorPassword(sectorKey);
         if (!expectedPass) {
@@ -728,10 +900,13 @@
         }
       },
 
-      confirmRoleChange(event) {
+      async confirmRoleChange(event) {
         event.preventDefault();
         if (!state.pendingRoleId) return;
         syncSharedStateFromStorage();
+        if (window.__cloudSync && typeof window.__cloudSync.pullLatest === "function") {
+          await window.__cloudSync.pullLatest();
+        }
         const sectorKey = getRoleSectorKey(state.pendingRoleId);
         const expectedPass = getSectorPassword(sectorKey);
         if (state.passwordDraft === expectedPass) {
@@ -2703,7 +2878,7 @@
           ${renderActiveSection()}
         </main>
         <footer class="border-t border-slate-200/80 bg-white/80 py-3.5 px-4 text-center text-xs text-slate-500">
-          Grand Hotel — Capi Servizio Hub • Accesso per reparto con salvataggio automatico locale
+          Grand Hotel — Capi Servizio Hub • Accesso per reparto con sincronizzazione dati
         </footer>
         ${renderRoleLockModal()}
       `;
