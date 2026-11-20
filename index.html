@@ -1405,7 +1405,7 @@
     function renderDirectionStaffManagerBox() {
       if (!canViewAllDepartments()) return "";
 
-      const selectableDepts = DEPARTMENTS.filter((d) => d.id !== "direzione");
+      const selectableDepts = DEPARTMENTS;
       const getDeptBadge = (deptId) => {
         const d = DEPARTMENTS.find((item) => item.id === deptId);
         return d
